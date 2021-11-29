@@ -9,8 +9,7 @@
 #include <ArduinoJson.h>
 #include <ezTime.h>     
 
-#define INTERVAL 10000  // IoT message sending interval in ms
-#define MESSAGE_MAX_LEN 256
+
 
 //// PULSE COUNTER MODULE ////
 #define PCNT_FREQ_UNIT      PCNT_UNIT_0     // select ESP32 pulse counter unit 0 (out of 0 to 7 indipendent counting units)
@@ -27,15 +26,16 @@ int liters = 0;                                           // number of liters th
 int P1_status = 0;                                        //status of the sanitizer pump 1 (0: OFF, 1: ON)
 int P2_status = 0;                                        //status of the sanitizer pump 2 (0: OFF, 1: ON)
 //// Chlorine sensor reading variable ////
-float chlorine_concentration = 0.1;                         // concentration of chlorine given by crs1 (range: 0.1 ppm - 20 ppm)
-//// firmware version of the device  ////
-char sw_version[] = "0.1";    
+float chlorine_concentration = 0.1;                       // concentration of chlorine given by crs1 (range: 0.1 ppm - 20 ppm)
+//// firmware version of the device and device id ////
+#define SW_VERSION "0.1"
+#define DEVICE_ID "geniale board 1"     
 //// Other handy variables ////
 volatile int new_request = 0;                             // flag that tells if a new request has arrived from the hub
 int received_msg_id = 0;                                  // used for ack mechanism
-int received_msg_type = -1;                             // if 0 the HUB wants to know the status of the device
+int received_msg_type = -1;                               // if 0 the HUB wants to know the status of the device
                                                           // if 1 the HUB wants to change the status of the device (with thw values passed in the message)
-                                                          // if 2 the HUB ACKs the device
+                                                          // if 2 the device ACKs the HUB
 // defines for message type 
 #define STATUS 0
 #define SET_VALUES 1
@@ -53,6 +53,8 @@ int received_msg_type = -1;                             // if 0 the HUB wants to
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000001;SharedAccessKey=Cn4UylzZVDZD8UGzCTJazR3A9lRLnB+CbK6NkHxCIMk=";
 static bool hasIoTHub = false;
 static bool hasWifi = false;
+#define INTERVAL 10000  // IoT message sending interval in ms
+#define MESSAGE_MAX_LEN 256
 //int messageCount = 1;
 //static bool messageSending = true;
 //static uint64_t send_interval_ms;
@@ -251,8 +253,8 @@ if (hasWifi && hasIoTHub)
       msgtosend["message_id"] = received_msg_id;
       msgtosend["timestamp"] = UTC.dateTime(ISO8601);
       msgtosend["message_type"] = reply_type;
-      msgtosend["device_id"] = "geniale board 1";
-      msgtosend["iot_module_software_version"] = "0.1";
+      msgtosend["device_id"] = DEVICE_ID;
+      msgtosend["iot_module_software_version"] = SW_VERSION;
       msgtosend["SL1"] = digitalRead(SL1_GPIO);
       msgtosend["CRS1"] = chlorine_concentration;
       get_liters();
