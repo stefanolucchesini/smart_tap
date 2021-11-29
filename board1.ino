@@ -1,15 +1,9 @@
-/**
- * A simple Azure IoT example for sending telemetry to Iot Hub.
- */
-
 #include <WiFi.h>
 #include "Esp32MQTTClient.h"
 #include <WiFiManager.h> 
 #include "driver/pcnt.h"   //Pulse counter library
 #include <ArduinoJson.h>
 #include <ezTime.h>     
-
-
 
 //// PULSE COUNTER MODULE ////
 #define PCNT_FREQ_UNIT      PCNT_UNIT_0     // select ESP32 pulse counter unit 0 (out of 0 to 7 indipendent counting units)
@@ -60,11 +54,11 @@ static bool hasWifi = false;
 //static uint64_t send_interval_ms;
 
 ////  I/Os definitions    ////
+#define SL1_GPIO  35                 // Level sensor connected to GPIO35
 #define PCNT_INPUT_SIG_IO   34       // Flow sensor connected to GPIO34
-#define P2_GPIO   33       // Sanitizer pump P2 contact connected to GPIO33
-#define P1_GPIO   32       // Sanitizer pump P1 contact connected to GPIO32
-#define SL1_GPIO  35       // Level sensor connected to GPIO35
-#define LED   5           // Status led connected to GPIO5
+#define P2_GPIO   33                 // Sanitizer pump P2 contact connected to GPIO33
+#define P1_GPIO   32                 // Sanitizer pump P1 contact connected to GPIO32
+#define LED   5                      // Status led connected to GPIO5
 
 static void SendConfirmationCallback(IOTHUB_CLIENT_CONFIRMATION_RESULT result)
 {
@@ -205,21 +199,19 @@ void setup() {
   delay(10);
 
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
-  // it is a good practice to make sure your code sets wifi mode how you want it.
   WiFiManager wm;
   //wm.resetSettings();  // reset settings - wipe stored credentials for testing
   bool res;
-  // res = wm.autoConnect(); // auto generated AP name from chipid
-  res = wm.autoConnect("GENIALE"); // anonymous ap
-  //res = wm.autoConnect("AutoConnectAP","password"); // password protected ap
-
+  res = wm.autoConnect("GENIALE brd1 setup"); // Generates a pwd-free ap for the user to connect and tell Wi-Fi credentials
+  //res = wm.autoConnect("AutoConnectAP","password"); // Generates a pwd-protected ap for the user to connect and tell Wi-Fi credentials
   if(!res) {
       Serial.println("Failed to connect to wifi");
-      // ESP.restart();
+      delay(10000);
+      ESP.restart();
   } 
   else {
       //if you get here you have connected to the WiFi    
-      Serial.println("Connected to wifi...");
+      Serial.println("Connected to wifi!");
       ledcWrite(LED_CHANNEL, ON);
       // Wait for ezTime to get its time synchronized
 	    waitForSync();
@@ -255,7 +247,7 @@ if (hasWifi && hasIoTHub)
       msgtosend["message_type"] = reply_type;
       msgtosend["device_id"] = DEVICE_ID;
       msgtosend["iot_module_software_version"] = SW_VERSION;
-      msgtosend["SL1"] = digitalRead(SL1_GPIO);
+      msgtosend["SL1"] = ( digitalRead(SL1_GPIO) == 0 ) ? 1 : 0;                // Closed contact means LOW sanitizer level!
       msgtosend["CRS1"] = chlorine_concentration;
       get_liters();
       msgtosend["FL1"] = liters;
