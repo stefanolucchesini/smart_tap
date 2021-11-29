@@ -41,6 +41,14 @@ int received_msg_type = -1;                             // if 0 the HUB wants to
 #define SET_VALUES 1
 #define HUB_ACK 2
 
+// STATUS LED HANDLING
+#define LED_CHANNEL 0
+#define RESOLUTION 8
+#define LED_PWM_FREQ 10
+#define OFF 0
+#define BLINK_5HZ 128
+#define ON 255
+
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000001;SharedAccessKey=Cn4UylzZVDZD8UGzCTJazR3A9lRLnB+CbK6NkHxCIMk=";
 static bool hasIoTHub = false;
@@ -66,6 +74,7 @@ static void SendConfirmationCallback(IOTHUB_CLIENT_CONFIRMATION_RESULT result)
 
 static void MessageCallback(const char* payLoad, int size)
 {
+  ledcWrite(LED_CHANNEL, ON);
   Serial.println("Received message from HUB");
   if (size < 256) { 
     StaticJsonDocument<256> doc;
@@ -178,10 +187,12 @@ void setup() {
   pinMode(SL1_GPIO, INPUT);
   pinMode(P1_GPIO, OUTPUT);     
   pinMode(P2_GPIO, OUTPUT);
-  pinMode(LED, OUTPUT);
   digitalWrite(P1_GPIO, LOW);                         //Set contacts initially open
   digitalWrite(P2_GPIO, LOW);
-  digitalWrite(LED, LOW);
+  // configure LED PWM functionalitites
+  ledcSetup(LED_CHANNEL, LED_PWM_FREQ, RESOLUTION);
+  ledcAttachPin(LED, LED_CHANNEL);                              // Attach PWM module to status LED
+  ledcWrite(LED_CHANNEL, BLINK_5HZ);                            // LED initially blinks at 5Hz
   initPulseCounter();
   Serial.begin(115200);
   Serial.println("ESP32 Device");
@@ -207,11 +218,11 @@ void setup() {
   else {
       //if you get here you have connected to the WiFi    
       Serial.println("Connected to wifi...");
+      ledcWrite(LED_CHANNEL, ON);
       // Wait for ezTime to get its time synchronized
 	    waitForSync();
       Serial.println("UTC Time in ISO8601: " + UTC.dateTime(ISO8601));
       hasWifi = true;
-      digitalWrite(LED, HIGH);
     }
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
@@ -230,6 +241,7 @@ void setup() {
   Serial.println("Waiting for messages from HUB...");
   randomSeed(analogRead(0));
   //send_interval_ms = millis();
+  ledcWrite(LED_CHANNEL, OFF);
 }
 
 void send_reply(int reply_type) {
@@ -254,6 +266,7 @@ if (hasWifi && hasIoTHub)
       Serial.println(out);
       EVENT_INSTANCE* message = Esp32MQTTClient_Event_Generate(out, MESSAGE);
       Esp32MQTTClient_SendEventInstance(message);
+      ledcWrite(LED_CHANNEL, OFF);
   }
 }
 
@@ -273,6 +286,7 @@ void loop() {
         break;
       default:
         Serial.println("Invalid message type!");
+        ledcWrite(LED_CHANNEL, OFF);
         break;
     }
   }
