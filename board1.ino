@@ -18,8 +18,14 @@ int old_liters = 0;
 #define PULSES_PER_LITER 165                              // 165 pulses from the flux sensor tell that a liter has passed
 
 //// Sanitizer level pumps status////
-int P1_status = 0;                                        //status of the sanitizer pump 1 (0: OFF, 1: ON)
-int P2_status = 0;                                        //status of the sanitizer pump 2 (0: OFF, 1: ON)
+volatile int P1_status = 0;                               //status of the sanitizer pump 1 (0: OFF, 1: ON)
+volatile int P2_status = 0;                               //status of the sanitizer pump 2 (0: OFF, 1: ON)
+volatile int P1_pulses = 0;                               //number of impulses to send to the sanitizer pump 1
+volatile int P2_pulses = 0;                               //number of impulses to send to the sanitizer pump 2
+volatile int p1pulsescounter = 0;                         //counter used to perform requested impulses on pump 1
+volatile int p2pulsescounter = 0;                         //counter used to perform requested impulses on pump 2
+volatile int p1toggle = 1;                                //variable used for toggling pump 1 pin
+volatile int p2toggle = 1;                                //variable used for toggling pump 2 pin
 //// Chlorine sensor reading variable ////
 float chlorine_concentration = 0.1;                       // concentration of chlorine given by crs1 (range: 0.1 ppm - 20 ppm)
 // Level sensor status
@@ -64,6 +70,47 @@ int messageCount = 1;                // tells the number of the sent message
 #define P1_GPIO   32                 // Sanitizer pump P1 contact connected to GPIO32
 #define LED   5                      // Status led connected to GPIO5
 
+// Create a timer to generate an ISR at a defined frequency in order to sample the system
+hw_timer_t * timer = NULL;
+#define OVF_MS 1000                      // The timer interrupt fires every second
+volatile bool new_status = false;       // When it's true a sensor has changed its value and it needs to be sent
+
+void IRAM_ATTR onTimer(){            // Timer ISR, called on timer overflow every OVF_MS
+  // Read status of sensors  //
+  get_liters();
+  SL1_status = ( digitalRead(SL1_GPIO) == 0 ) ? 1 : 0;
+
+  if( liters != old_liters || SL1_status != old_SL1_status ) 
+    new_status = true;
+
+  if(P1_status == 1) {
+    if(p1pulsescounter < 2*P1_pulses) {
+      digitalWrite(P1_GPIO, p1toggle);
+      p1toggle = !p1toggle;                       
+      p1pulsescounter++; 
+    }     
+    else {
+        P1_status = 0;
+        p1pulsescounter = 0;
+        new_status = true;    // update p1 status (bring it back to 0)
+    }   
+  }
+  if(P2_status == 1) {
+    if(p2pulsescounter < 2*P2_pulses) {
+      digitalWrite(P2_GPIO, p2toggle); 
+      p2toggle = !p2toggle;       
+      p2pulsescounter++;                      
+      }
+    else {
+      P2_status = 0;
+      p2pulsescounter = 0;
+      new_status = true;    // update p2 status (bring it back to 0)    
+    }
+  }  
+  old_liters = liters;
+  old_SL1_status = SL1_status;
+}
+
 static void SendConfirmationCallback(IOTHUB_CLIENT_CONFIRMATION_RESULT result)
 {
   if (result == IOTHUB_CLIENT_CONFIRMATION_OK)
@@ -89,7 +136,9 @@ static void MessageCallback(const char* payLoad, int size)
     received_msg_type = doc["message_type"];
       if(received_msg_type == SET_VALUES) {
           P1_status = doc["P1"];
+          P1_pulses = doc["P1_pulses"];
           P2_status = doc["P2"];
+          P2_pulses = doc["P2_pulses"];
       }
     }
   }
@@ -179,7 +228,7 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
 
   void get_liters(){                                    // converts the pulses received from fl1 to liters
       pcnt_get_counter_value(PCNT_FREQ_UNIT, &PulseCounter);     // get pulse counter value - maximum value is 16 bit
-      liters = ( OverflowCounter*PCNT_EVT_H_LIM + PulseCounter ) / PULSES_PER_LITER;
+      liters = ( OverflowCounter*PCNT_H_LIM_VAL + PulseCounter ) / PULSES_PER_LITER;
   }
 
 void setup() {
@@ -237,10 +286,23 @@ void setup() {
   Esp32MQTTClient_SetMessageCallback(MessageCallback);
   //Esp32MQTTClient_SetDeviceTwinCallback(DeviceTwinCallback);
   //Esp32MQTTClient_SetDeviceMethodCallback(DeviceMethodCallback);
-  Serial.println("Waiting for messages from HUB...");
+  
   randomSeed(analogRead(0));
   //send_interval_ms = millis();
+  /* Use 1st timer of 4 */
+  /* 1 tick take 1/(80MHZ/80) = 1us so we set divider 80 and count up */
+  timer = timerBegin(0, 80, true);
+  /* Attach onTimer function to our timer */
+  timerAttachInterrupt(timer, &onTimer, true);
+  /* Set alarm to call onTimer function every OVF_MS milliseconds. 
+  1 tick is 1us*/
+  /* Repeat the alarm (third parameter) */
+  timerAlarmWrite(timer, 1000*OVF_MS, true);
+  /* Start an alarm */
+  timerAlarmEnable(timer);
+  Serial.println("ISR Timer started");
   ledcWrite(LED_CHANNEL, OFF);
+  Serial.println("Waiting for messages from HUB...");
 }
 
 void send_message(int reply_type, int msgid) {
@@ -260,7 +322,7 @@ if (hasWifi && hasIoTHub)
       char out[256];
       int msgsize =serializeJson(msgtosend, out);
       //Serial.println(msgsize);
-      Serial.println("Replying to HUB with:");
+      Serial.println("Sending message to HUB:");
       Serial.println(out);
       EVENT_INSTANCE* message = Esp32MQTTClient_Event_Generate(out, MESSAGE);
       Esp32MQTTClient_SendEventInstance(message);
@@ -270,21 +332,12 @@ if (hasWifi && hasIoTHub)
 
 
 void loop() {
-  // Read status of sensors  //
-  get_liters();
-  SL1_status = ( digitalRead(SL1_GPIO) == 0 ) ? 1 : 0;
-  if( liters != old_liters || SL1_status != old_SL1_status ) {
-    send_message(STATUS, messageCount);
-    messageCount++;
-  }
   Esp32MQTTClient_Check();
   // if a request has arrived from the hub, process it and send a reply
   if(new_request == true){
     new_request = false;
     switch (received_msg_type)  {
       case SET_VALUES: 
-        digitalWrite(P1_GPIO, P1_status);                         //Set P1 and P2 state depending on messages
-        digitalWrite(P2_GPIO, P2_status);
         send_message(ACK_HUB, received_msg_id);
         break;
       case STATUS:
@@ -296,8 +349,9 @@ void loop() {
         break;
     }
   }
-  get_liters();
-  old_liters = liters;
-  old_SL1_status = ( digitalRead(SL1_GPIO) == 0 ) ? 1 : 0;
-  delay(200);
+  if(new_status == true) {
+    new_status = false;
+    send_message(STATUS, messageCount);
+    messageCount++;
+  }
 }
