@@ -14,6 +14,7 @@ int PCNT_H_LIM_VAL =       30000;                            // upper limit of c
 uint16_t PCNT_FILTER_VAL=  0;                             // filter (damping, inertia) value for avoiding glitches in the count, max. 1023
 pcnt_isr_handle_t user_isr_handle = NULL;                 // user interrupt handler (not used)
 int liters = 0;                                           // number of liters that pass through the flux sensor
+int old_liters = 0;
 #define PULSES_PER_LITER 165                              // 165 pulses from the flux sensor tell that a liter has passed
 
 //// Sanitizer level pumps status////
@@ -21,19 +22,22 @@ int P1_status = 0;                                        //status of the saniti
 int P2_status = 0;                                        //status of the sanitizer pump 2 (0: OFF, 1: ON)
 //// Chlorine sensor reading variable ////
 float chlorine_concentration = 0.1;                       // concentration of chlorine given by crs1 (range: 0.1 ppm - 20 ppm)
+// Level sensor status
+int SL1_status;                                           // 0: low level, 1: high level
+int old_SL1_status;
 //// firmware version of the device and device id ////
 #define SW_VERSION "0.1"
 #define DEVICE_ID "geniale board 1"     
 //// Other handy variables ////
-volatile int new_request = 0;                             // flag that tells if a new request has arrived from the hub
-int received_msg_id = 0;                                  // used for ack mechanism
-int received_msg_type = -1;                               // if 0 the HUB wants to know the status of the device
-                                                          // if 1 the HUB wants to change the status of the device (with thw values passed in the message)
-                                                          // if 2 the device ACKs the HUB
+volatile bool new_request = false;                        // flag that tells if a new request has arrived from the hub
+volatile int received_msg_id = 0;                         // used for ack mechanism
+volatile int received_msg_type = -1;                      // if 0 the device is sending its status
+                                                          // if 1 the HUB wants to change the status of the device (with the values passed in the message)
+                                                          // if 2 the device ACKs the HUB in response to a command
 // defines for message type 
 #define STATUS 0
 #define SET_VALUES 1
-#define HUB_ACK 2
+#define ACK_HUB 2
 
 // STATUS LED HANDLING
 #define LED_CHANNEL 0
@@ -47,9 +51,9 @@ int received_msg_type = -1;                               // if 0 the HUB wants 
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000001;SharedAccessKey=Cn4UylzZVDZD8UGzCTJazR3A9lRLnB+CbK6NkHxCIMk=";
 static bool hasIoTHub = false;
 static bool hasWifi = false;
-#define INTERVAL 10000  // IoT message sending interval in ms
+#define INTERVAL 10000               // IoT message sending interval in ms
 #define MESSAGE_MAX_LEN 256
-//int messageCount = 1;
+int messageCount = 1;                // tells the number of the sent message
 //static bool messageSending = true;
 //static uint64_t send_interval_ms;
 
@@ -80,7 +84,7 @@ static void MessageCallback(const char* payLoad, int size)
       Serial.println(error.f_str());
     }
     else {  
-    new_request = 1;
+    new_request = true;
     received_msg_id = doc["message_id"];
     received_msg_type = doc["message_type"];
       if(received_msg_type == SET_VALUES) {
@@ -141,7 +145,7 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
 //// PULSE COUNTER OVERFLOW ISR ////
   void IRAM_ATTR CounterOverflow(void *arg) {                  // Interrupt for overflow of pulse counter
     OverflowCounter = OverflowCounter + 1;                     // increase overflow counter
-    PCNT.int_clr.val = BIT(PCNT_FREQ_UNIT);                    // clean overflow flag
+    PCNT.int_clr.val = BIT(PCNT_FREQ_UNIT);                    // clear overflow flag
     pcnt_counter_clear(PCNT_FREQ_UNIT);                        // zero and reset of pulse counter unit
   }
 
@@ -179,12 +183,13 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
   }
 
 void setup() {
-  pinMode(PCNT_INPUT_SIG_IO, INPUT);                  // the output of the flow sensor is open collector (MUST USE EXTERNAL PULL UP!!)
+  pinMode(PCNT_INPUT_SIG_IO, INPUT);                            // the output of the flow sensor is open collector (MUST USE EXTERNAL PULL UP!!)
   pinMode(SL1_GPIO, INPUT);
   pinMode(P1_GPIO, OUTPUT);     
   pinMode(P2_GPIO, OUTPUT);
-  digitalWrite(P1_GPIO, LOW);                         //Set contacts initially open
+  digitalWrite(P1_GPIO, LOW);                                   // P1 and P2 are initially off
   digitalWrite(P2_GPIO, LOW);
+  SL1_status = ( digitalRead(SL1_GPIO) == 0 ) ? 1 : 0;          // read the status of the level sensor
   // configure LED PWM functionalitites
   ledcSetup(LED_CHANNEL, LED_PWM_FREQ, RESOLUTION);
   ledcAttachPin(LED, LED_CHANNEL);                              // Attach PWM module to status LED
@@ -238,18 +243,17 @@ void setup() {
   ledcWrite(LED_CHANNEL, OFF);
 }
 
-void send_reply(int reply_type) {
+void send_message(int reply_type, int msgid) {
 if (hasWifi && hasIoTHub)
   {
-      StaticJsonDocument<256> msgtosend;  // pre-allocate 256 bytes of memory for the json message
-      msgtosend["message_id"] = received_msg_id;
+      StaticJsonDocument<256> msgtosend;            // pre-allocate 256 bytes of memory for the json message
+      msgtosend["message_id"] = msgid;
       msgtosend["timestamp"] = UTC.dateTime(ISO8601);
       msgtosend["message_type"] = reply_type;
       msgtosend["device_id"] = DEVICE_ID;
       msgtosend["iot_module_software_version"] = SW_VERSION;
-      msgtosend["SL1"] = ( digitalRead(SL1_GPIO) == 0 ) ? 1 : 0;                // Closed contact means LOW sanitizer level!
+      msgtosend["SL1"] = SL1_status;                // Closed contact means LOW sanitizer level!
       msgtosend["CRS1"] = chlorine_concentration;
-      get_liters();
       msgtosend["FL1"] = liters;
       msgtosend["P1"] = P1_status;
       msgtosend["P2"] = P2_status;
@@ -266,17 +270,25 @@ if (hasWifi && hasIoTHub)
 
 
 void loop() {
+  // Read status of sensors  //
+  get_liters();
+  SL1_status = ( digitalRead(SL1_GPIO) == 0 ) ? 1 : 0;
+  if( liters != old_liters || SL1_status != old_SL1_status ) {
+    send_message(STATUS, messageCount);
+    messageCount++;
+  }
   Esp32MQTTClient_Check();
-  if(new_request){
-    new_request = 0;
+  // if a request has arrived from the hub, process it and send a reply
+  if(new_request == true){
+    new_request = false;
     switch (received_msg_type)  {
       case SET_VALUES: 
-        digitalWrite(P1_GPIO, P1_status);                         //Set contact state depending on messages
+        digitalWrite(P1_GPIO, P1_status);                         //Set P1 and P2 state depending on messages
         digitalWrite(P2_GPIO, P2_status);
-        send_reply(HUB_ACK);
+        send_message(ACK_HUB, received_msg_id);
         break;
       case STATUS:
-        send_reply(STATUS);
+        send_message(STATUS, received_msg_id);
         break;
       default:
         Serial.println("Invalid message type!");
@@ -284,4 +296,8 @@ void loop() {
         break;
     }
   }
+  get_liters();
+  old_liters = liters;
+  old_SL1_status = ( digitalRead(SL1_GPIO) == 0 ) ? 1 : 0;
+  delay(200);
 }
