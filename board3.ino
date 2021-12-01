@@ -13,10 +13,12 @@ int OverflowCounter =      0;                                // pulse counter ov
 int PCNT_H_LIM_VAL =       30000;                            // upper limit of counting  max. 32767, write +1 to overflow counter, when reached 
 uint16_t PCNT_FILTER_VAL=  0;                             // filter (damping, inertia) value for avoiding glitches in the count, max. 1023
 pcnt_isr_handle_t user_isr_handle = NULL;                 // user interrupt handler (not used)
-int liters = 0;                                           // number of liters that pass through the flux sensor
-int old_liters = 0;
+RTC_DATA_ATTR int liters = 0;                             // number of liters that pass through the flux sensor
 #define PULSES_PER_LITER 165                              // 165 pulses from the flux sensor tell that a liter has passed
-
+//// Deep sleep params ////
+#define uS_TO_S_FACTOR 1000000ULL   /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP  60           /* Time ESP32 will go to sleep (in seconds) */
+RTC_DATA_ATTR int bootCount = 0;
 //// PH sensor reading variable ////
 float pH_value = 4;                                       // pH value read from the pH sensor (reliable range: 4.5 <-> 9.5)
 //// Electrovalves status variables ////
@@ -57,7 +59,7 @@ int messageCount = 1;                // tells the number of the sent message
 //static uint64_t send_interval_ms;
 
 ////  I/Os definitions    ////
-#define PCNT_INPUT_SIG_IO   34       // Flow sensor connected to GPIO34
+#define PCNT_INPUT_SIG_IO   27       // Flow sensor connected to GPIO27
 #define EV2_GPIO   15  
 #define EV3_GPIO   13  
 #define EV4_GPIO   14  
@@ -179,33 +181,20 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
     pcnt_counter_clear(PCNT_FREQ_UNIT);                        // zero and reset of pulse counter unit
   }
 
-  void get_liters(){                                    // converts the pulses received from fl1 to liters
+  int get_liters(){                                    // converts the pulses received from fl1 to liters
       pcnt_get_counter_value(PCNT_FREQ_UNIT, &PulseCounter);     // get pulse counter value - maximum value is 16 bit
-      liters = ( OverflowCounter*PCNT_H_LIM_VAL + PulseCounter ) / PULSES_PER_LITER;
+      return ( OverflowCounter*PCNT_H_LIM_VAL + PulseCounter ) / PULSES_PER_LITER;
   }
 
-void setup() {
-  pinMode(PCNT_INPUT_SIG_IO, INPUT);                            // the output of the flow sensor is open collector (MUST USE EXTERNAL PULL UP!!)
-  pinMode(EV2_GPIO, INPUT);
-  pinMode(EV3_GPIO, OUTPUT);     
-  pinMode(EV4_GPIO, OUTPUT);
-  pinMode(EV5_GPIO, OUTPUT);
-  digitalWrite(EV2_GPIO, LOW);                                   // All electrovalves are initially off
-  digitalWrite(EV3_GPIO, LOW);
-  digitalWrite(EV4_GPIO, LOW);
-  digitalWrite(EV5_GPIO, LOW);
+void setup_with_wifi() {
   // configure status LED PWM functionalitites
   ledcSetup(LED_CHANNEL, LED_PWM_FREQ, RESOLUTION);
   ledcAttachPin(LED, LED_CHANNEL);                              // Attach PWM module to status LED
   ledcWrite(LED_CHANNEL, BLINK_5HZ);                            // LED initially blinks at 5Hz
-  initPulseCounter();
-  Serial.begin(115200);
   Serial.println("ESP32 Device");
   Serial.println("Initializing...");
   Serial.println(" > WiFi");
   Serial.println("Starting connecting WiFi.");
-
-  delay(10);
 
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
   WiFiManager wm;
@@ -246,6 +235,64 @@ void setup() {
   //send_interval_ms = millis();
   ledcWrite(LED_CHANNEL, OFF);
   Serial.println("Waiting for messages from HUB...");
+}
+void setup_just_to_update_flux() {
+  int old_liters = 0;
+  while(true){
+    delay(2000);
+    int current_liters = get_liters();
+    if(current_liters>old_liters) {
+      Serial.println("Currently flushing liters");
+      Serial.println(current_liters);
+    }
+    else {
+      Serial.println("Water not flushed anymore, going back to sleep");
+      liters += current_liters;
+      esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, 1);                 //1 = High, 0 = Low
+      esp_deep_sleep_start();
+    }
+    old_liters = current_liters;
+  }
+}
+
+void setup() {
+  pinMode(PCNT_INPUT_SIG_IO, INPUT);                            // the output of the flow sensor is open collector (MUST USE EXTERNAL PULL UP!!)
+  initPulseCounter();
+  pinMode(EV2_GPIO, INPUT);
+  pinMode(EV3_GPIO, OUTPUT);     
+  pinMode(EV4_GPIO, OUTPUT);
+  pinMode(EV5_GPIO, OUTPUT);
+  digitalWrite(EV2_GPIO, LOW);                                   // All electrovalves are initially off
+  digitalWrite(EV3_GPIO, LOW);
+  digitalWrite(EV4_GPIO, LOW);
+  digitalWrite(EV5_GPIO, LOW);
+  Serial.begin(115200);
+  delay(500);                                                   //Take some time to open up the Serial Monitor
+  //Increment boot number and print it every reboot
+  ++bootCount;
+  Serial.println("Boot number: " + String(bootCount));
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  // PERFORM ACTIONS DEPENDING ON WAKEUP REASON //
+  esp_sleep_wakeup_cause_t wakeup_reason;
+  wakeup_reason = esp_sleep_get_wakeup_cause();
+  switch(wakeup_reason)
+  {
+    case ESP_SLEEP_WAKEUP_EXT0 : 
+    Serial.println("Wakeup caused by external signal using RTC_IO"); 
+    setup_just_to_update_flux();
+    break;
+    case ESP_SLEEP_WAKEUP_EXT1 : 
+    Serial.println("Wakeup caused by external signal using RTC_CNTL"); 
+    break;
+    case ESP_SLEEP_WAKEUP_TIMER : 
+    Serial.println("Wakeup caused by timer"); 
+    setup_with_wifi();
+    break;
+    default:
+    Serial.println("It's the first boot"); 
+    setup_with_wifi();
+    break;
+  }
 }
 
 void send_message(int reply_type, int msgid) {
@@ -292,5 +339,8 @@ void loop() {
         ledcWrite(LED_CHANNEL, OFF);
         break;
     }
+      Serial.println("Going into deep sleep");
+      esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, 1);                 //1 = High, 0 = Low
+      esp_deep_sleep_start();
   }
 }
