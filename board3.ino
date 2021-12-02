@@ -25,7 +25,8 @@ RTC_DATA_ATTR int FL3_liters = 0;                             // number of liter
 #define TIME_TO_SLEEP  60           /* Time ESP32 will go to sleep (in seconds) */
 RTC_DATA_ATTR int bootCount = 0;
 //// PH sensor reading variable ////
-float pH_value = 4.6;                                       // pH value read from the pH sensor (reliable range: 4.5 <-> 9.5)
+float pH_value = 4.6;                                       // pH value read from the pH sensor (typical range: 4.5 <-> 9.5)
+
 //// Electrovalves status variables ////
 int EV2_status = 0;
 int EV3_status = 0;
@@ -71,7 +72,14 @@ float Q = -259.980583;
 #define TEMP_SAMPLES 200                                  // Number of samples taken to give a temperature value
 #define TEMP_INTERVAL 10                                  // Interval of time in ms between two successive samples
 
-
+// Variables for voltages corresponding to conductiviy ranges, for ECDICPT/1:
+//227 mV correspond to 5 mS and an ADC read of ...
+//417 mV correspond to 2.5 mS and an ADC read of ...
+//Conductivity = Mc * ADC + Qc
+float Mc = 0.1;   //values still to be computed        
+float Qc = -2;
+#define COND_SAMPLES 200                                  // Number of samples taken to give a conductivity value
+#define COND_INTERVAL 10                                  // Interval of time in ms between two successive samples
 
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000001;SharedAccessKey=Cn4UylzZVDZD8UGzCTJazR3A9lRLnB+CbK6NkHxCIMk=";
@@ -306,6 +314,9 @@ void setup_with_wifi() {
   ST2_temp = read_temperature(ST2_FORCE_GPIO, ST2_MEASURE_GPIO);
   ST3_temp = read_temperature(ST3_FORCE_GPIO, ST3_MEASURE_GPIO);
   ST4_temp = read_temperature(ST4_FORCE_GPIO, ST4_MEASURE_GPIO);
+  SR1_value = read_conductivity(SR1_FORCE_GPIO, SR1_MEASURE_GPIO);
+  SR2_value = read_conductivity(SR2_FORCE_GPIO, SR2_MEASURE_GPIO);
+  SR3_value = read_conductivity(SR3_FORCE_GPIO, SR3_MEASURE_GPIO);
   ledcWrite(LED_CHANNEL, OFF);
   Serial.println("Sending status message to HUB...");
   send_message(STATUS, messageCount++);
@@ -351,6 +362,22 @@ float read_temperature(int GPIO_FORCE, int GPIO_MEASURE) {
   digitalWrite(GPIO_FORCE, LOW);
   //Serial.println(String("Temperature in deg C: ") + String(mean/100, 2));
   return roundf(mean/(TEMP_SAMPLES/10)) / 10;   //return the temperature with a single decimal place
+}
+
+float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
+  digitalWrite(GPIO_FORCE, HIGH);
+  float mean = 0;
+  float val, conductivity;
+    // acquire COND_SAMPLES samples and compute mean
+    for(int i = 0; i < COND_SAMPLES; i++)  {
+        val = analogRead(GPIO_MEASURE);
+        conductivity = Mc * val + Qc;
+        mean += conductivity;
+        delay(COND_INTERVAL); 
+      }
+  digitalWrite(GPIO_FORCE, LOW);
+  //Serial.println(String("Conductivity in milliSiemens: ") + String(mean/100, 2));
+  return roundf(mean/(COND_SAMPLES/10)) / 10;   //return the conductivity with a single decimal place
 }
 
 void setup() {
@@ -447,6 +474,9 @@ void loop() {
         ST2_temp = read_temperature(ST2_FORCE_GPIO, ST2_MEASURE_GPIO);
         ST3_temp = read_temperature(ST3_FORCE_GPIO, ST3_MEASURE_GPIO);
         ST4_temp = read_temperature(ST4_FORCE_GPIO, ST4_MEASURE_GPIO);
+        SR1_value = read_conductivity(SR1_FORCE_GPIO, SR1_MEASURE_GPIO);
+        SR2_value = read_conductivity(SR2_FORCE_GPIO, SR2_MEASURE_GPIO);
+        SR3_value = read_conductivity(SR3_FORCE_GPIO, SR3_MEASURE_GPIO);
         send_message(STATUS, received_msg_id);
         break;
       default:
