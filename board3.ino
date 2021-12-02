@@ -62,6 +62,17 @@ volatile int received_msg_type = -1;                      // if 0 the device is 
 #define BLINK_5HZ 128
 #define ON 255
 
+// Variables for voltages corresponding to temperature ranges, for PT100:
+//1190 mV correspond to 0 deg C and an ADC read of 1308
+//1610 mV correspond to 100 deg C and an ADC read of 1823
+//Temperature = M * ADC + Q
+float M = 0.194174;        
+float Q = -259.980583;
+#define TEMP_SAMPLES 200                                  // Number of samples taken to give a temperature value
+#define TEMP_INTERVAL 10                                  // Interval of time in ms between two successive samples
+
+
+
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000001;SharedAccessKey=Cn4UylzZVDZD8UGzCTJazR3A9lRLnB+CbK6NkHxCIMk=";
 static bool hasIoTHub = false;
@@ -292,10 +303,13 @@ void setup_with_wifi() {
   
   randomSeed(analogRead(0));
   //send_interval_ms = millis();
+  ST2_temp = read_temperature(ST2_FORCE_GPIO, ST2_MEASURE_GPIO);
+  ST3_temp = read_temperature(ST3_FORCE_GPIO, ST3_MEASURE_GPIO);
+  ST4_temp = read_temperature(ST4_FORCE_GPIO, ST4_MEASURE_GPIO);
   ledcWrite(LED_CHANNEL, OFF);
   Serial.println("Sending status message to HUB...");
   send_message(STATUS, messageCount++);
-  Serial.println("Waiting for sleep message from HUB...");
+  Serial.println("Waiting for a message from HUB and going to sleep...");
 }
 
 void setup_just_to_update_flux() {
@@ -321,6 +335,22 @@ void setup_just_to_update_flux() {
     old_FL2_liters = current_FL2_liters;
     old_FL3_liters = current_FL3_liters;
   }
+}
+
+float read_temperature(int GPIO_FORCE, int GPIO_MEASURE) {
+  digitalWrite(GPIO_FORCE, HIGH);
+  float mean = 0;
+  float val, temperaturec;
+    // acquire TEMP_SAMPLES samples and compute mean
+    for(int i = 0; i < TEMP_SAMPLES; i++)  {
+        val = analogRead(GPIO_MEASURE);
+        temperaturec = M * val + Q;
+        mean += temperaturec;
+        delay(TEMP_INTERVAL); 
+      }
+  digitalWrite(GPIO_FORCE, LOW);
+  //Serial.println(String("Temperature in deg C: ") + String(mean/100, 2));
+  return roundf(mean/(TEMP_SAMPLES/10)) / 10;   //return the temperature with a single decimal place
 }
 
 void setup() {
@@ -406,14 +436,17 @@ void loop() {
     new_request = false;
     switch (received_msg_type)  {
       case SET_VALUES: 
-        send_message(ACK_HUB, received_msg_id);
-        break;
-      case STATUS:
         digitalWrite(EV2_GPIO, EV2_status);
         digitalWrite(EV3_GPIO, EV3_status);                   
         digitalWrite(EV4_GPIO, EV4_status);   
         digitalWrite(EV5_GPIO, EV5_status);   
         digitalWrite(RA1_GPIO, RA1_status);
+        send_message(ACK_HUB, received_msg_id);
+        break;
+      case STATUS:
+        ST2_temp = read_temperature(ST2_FORCE_GPIO, ST2_MEASURE_GPIO);
+        ST3_temp = read_temperature(ST3_FORCE_GPIO, ST3_MEASURE_GPIO);
+        ST4_temp = read_temperature(ST4_FORCE_GPIO, ST4_MEASURE_GPIO);
         send_message(STATUS, received_msg_id);
         break;
       default:
