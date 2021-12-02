@@ -4,6 +4,7 @@
 #include "driver/pcnt.h"   //Pulse counter library
 #include <ArduinoJson.h>
 #include <ezTime.h>     
+#include <driver/adc.h>
 
 //// PULSE COUNTER MODULES ////
 #define PCNT0_FREQ_UNIT      PCNT_UNIT_0     // select ESP32 pulse counter unit 0 (out of 0 to 7 indipendent counting units) for FL2
@@ -24,8 +25,6 @@ RTC_DATA_ATTR int FL3_liters = 0;                             // number of liter
 #define uS_TO_S_FACTOR 1000000ULL   /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP  60           /* Time ESP32 will go to sleep (in seconds) */
 RTC_DATA_ATTR int bootCount = 0;
-//// PH sensor reading variable ////
-float pH_value = 4.6;                                       // pH value read from the pH sensor (typical range: 4.5 <-> 9.5)
 
 //// Electrovalves status variables ////
 int EV2_status = 0;
@@ -63,23 +62,34 @@ volatile int received_msg_type = -1;                      // if 0 the device is 
 #define BLINK_5HZ 128
 #define ON 255
 
+//// PH sensor reading variable ////
+float pH_value = 4.6;                                       // pH value read from the pH sensor (typical range: 4.5 <-> 9.5)
+// Variables for voltages corresponding to pH values:
+//1107.5 mV correspond to a pH of 4.5 and an ADC read of ...
+//1392.5 mV correspond to a pH of 9.5 and an ADC read of ...
+//pH = Mp * ADC + Qp
+float Mp = 1;   //values still to be computed        
+float Qp = 0;
+#define pH_SAMPLES 10                                  // Number of samples taken to give a pH value
+#define pH_INTERVAL 100                                // Interval of time in ms between two successive samples
+
 // Variables for voltages corresponding to temperature ranges, for PT100:
 //1190 mV correspond to 0 deg C and an ADC read of 1308
 //1610 mV correspond to 100 deg C and an ADC read of 1823
 //Temperature = M * ADC + Q
 float M = 0.194174;        
 float Q = -259.980583;
-#define TEMP_SAMPLES 200                                  // Number of samples taken to give a temperature value
-#define TEMP_INTERVAL 10                                  // Interval of time in ms between two successive samples
+#define TEMP_SAMPLES 10                                // Number of samples taken to give a temperature value
+#define TEMP_INTERVAL 100                              // Interval of time in ms between two successive samples
 
 // Variables for voltages corresponding to conductiviy ranges, for ECDICPT/1:
 //227 mV correspond to 5 mS and an ADC read of ...
 //417 mV correspond to 2.5 mS and an ADC read of ...
 //Conductivity = Mc * ADC + Qc
-float Mc = 0.1;   //values still to be computed        
-float Qc = -2;
-#define COND_SAMPLES 200                                  // Number of samples taken to give a conductivity value
-#define COND_INTERVAL 10                                  // Interval of time in ms between two successive samples
+float Mc = 1;   //values still to be computed        
+float Qc = 0;
+#define COND_SAMPLES 10                                  // Number of samples taken to give a conductivity value
+#define COND_INTERVAL 100                                // Interval of time in ms between two successive samples
 
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000001;SharedAccessKey=Cn4UylzZVDZD8UGzCTJazR3A9lRLnB+CbK6NkHxCIMk=";
@@ -270,10 +280,16 @@ void setup_with_wifi() {
   ledcAttachPin(LED, LED_CHANNEL);                              // Attach PWM module to status LED
   ledcWrite(LED_CHANNEL, BLINK_5HZ);                            // LED initially blinks at 5Hz
   Serial.println("ESP32 Device");
-  Serial.println("Initializing...");
-  Serial.println(" > WiFi");
-  Serial.println("Starting connecting WiFi.");
-
+  Serial.println("Reading sensor values...");
+  // Sample sensors before enabling wifi (ADC on pin 25 does not work with wifi on)
+  ST2_temp = read_temperature(ST2_FORCE_GPIO, ST2_MEASURE_GPIO);
+  ST3_temp = read_temperature(ST3_FORCE_GPIO, ST3_MEASURE_GPIO);
+  ST4_temp = read_temperature(ST4_FORCE_GPIO, ST4_MEASURE_GPIO);
+  SR1_value = read_conductivity(SR1_FORCE_GPIO, SR1_MEASURE_GPIO);
+  SR2_value = read_conductivity(SR2_FORCE_GPIO, SR2_MEASURE_GPIO);
+  SR3_value = read_conductivity(SR3_FORCE_GPIO, SR3_MEASURE_GPIO);
+  pH_value = read_pH(SPH1_GPIO);
+  Serial.println("Starting WiFi connection...");
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
   WiFiManager wm;
   //wm.resetSettings();  // reset settings - wipe stored credentials for testing
@@ -311,12 +327,6 @@ void setup_with_wifi() {
   
   randomSeed(analogRead(0));
   //send_interval_ms = millis();
-  ST2_temp = read_temperature(ST2_FORCE_GPIO, ST2_MEASURE_GPIO);
-  ST3_temp = read_temperature(ST3_FORCE_GPIO, ST3_MEASURE_GPIO);
-  ST4_temp = read_temperature(ST4_FORCE_GPIO, ST4_MEASURE_GPIO);
-  SR1_value = read_conductivity(SR1_FORCE_GPIO, SR1_MEASURE_GPIO);
-  SR2_value = read_conductivity(SR2_FORCE_GPIO, SR2_MEASURE_GPIO);
-  SR3_value = read_conductivity(SR3_FORCE_GPIO, SR3_MEASURE_GPIO);
   ledcWrite(LED_CHANNEL, OFF);
   Serial.println("Sending status message to HUB...");
   send_message(STATUS, messageCount++);
@@ -360,7 +370,7 @@ float read_temperature(int GPIO_FORCE, int GPIO_MEASURE) {
         delay(TEMP_INTERVAL); 
       }
   digitalWrite(GPIO_FORCE, LOW);
-  //Serial.println(String("Temperature in deg C: ") + String(mean/100, 2));
+  //Serial.println(String("Temperature in deg C: ") + String(mean/TEMP_SAMPLES, 2));
   return roundf(mean/(TEMP_SAMPLES/10)) / 10;   //return the temperature with a single decimal place
 }
 
@@ -375,25 +385,61 @@ float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
         mean += conductivity;
         delay(COND_INTERVAL); 
       }
+  Serial.println(String("Raw cond val: ") + String(mean/COND_SAMPLES) + String(" On GPIO: ") + String(GPIO_MEASURE));
   digitalWrite(GPIO_FORCE, LOW);
-  //Serial.println(String("Conductivity in milliSiemens: ") + String(mean/100, 2));
+  //Serial.println(String("Conductivity in milliSiemens: ") + String(mean/COND_SAMPLES, 2));
   return roundf(mean/(COND_SAMPLES/10)) / 10;   //return the conductivity with a single decimal place
+}
+
+float read_pH(int GPIO_MEASURE) {
+  float mean = 0;
+  float val, pH;
+    // acquire pH_SAMPLES samples and compute mean
+    for(int i = 0; i < pH_SAMPLES; i++)  {
+        val = analogRead(GPIO_MEASURE);
+        pH = Mp * val + Qp;
+        mean += pH;
+        delay(pH_INTERVAL); 
+      }
+  Serial.println(String("Raw ph val ") + String(mean/pH_SAMPLES) + String(" On GPIO: ") + String(GPIO_MEASURE));    
+  //Serial.println(String("pH value: ") + String(mean/pH_SAMPLES, 2));
+  return roundf(mean/(pH_SAMPLES/10)) / 10;   //return the pH with a single decimal place
 }
 
 void setup() {
   pinMode(FL2_GPIO, INPUT);                            // the output of the FL2 flow sensor is open collector (MUST USE EXTERNAL PULL UP!!)
   pinMode(FL3_GPIO, INPUT);                            // the output of the FL3 flow sensor is open collector (MUST USE EXTERNAL PULL UP!!)
   initPulseCounters();
-  pinMode(EV2_GPIO, INPUT);
+  pinMode(EV2_GPIO, OUTPUT);
   pinMode(EV3_GPIO, OUTPUT);     
   pinMode(EV4_GPIO, OUTPUT);
   pinMode(EV5_GPIO, OUTPUT);
   pinMode(RA1_GPIO, OUTPUT);
-  digitalWrite(EV2_GPIO, LOW);                                   // All electrovalves are initially off
+  pinMode(ST2_FORCE_GPIO, OUTPUT);
+  pinMode(ST3_FORCE_GPIO, OUTPUT);
+  pinMode(ST4_FORCE_GPIO, OUTPUT);
+  pinMode(SR1_FORCE_GPIO, OUTPUT);
+  pinMode(SR2_FORCE_GPIO, OUTPUT);
+  pinMode(SR3_FORCE_GPIO, OUTPUT);
+  pinMode(ST2_MEASURE_GPIO, INPUT);
+  pinMode(ST3_MEASURE_GPIO, INPUT);
+  pinMode(ST4_MEASURE_GPIO, INPUT);
+  pinMode(SR1_MEASURE_GPIO, INPUT);
+  pinMode(SR2_MEASURE_GPIO, INPUT);
+  pinMode(SR3_MEASURE_GPIO, INPUT);
+  pinMode(SPH1_GPIO, INPUT);
+  digitalWrite(EV2_GPIO, LOW);                                  // All electrovalves are initially off
   digitalWrite(EV3_GPIO, LOW);
   digitalWrite(EV4_GPIO, LOW);
   digitalWrite(EV5_GPIO, LOW);
   digitalWrite(RA1_GPIO, LOW);
+  digitalWrite(ST2_FORCE_GPIO, LOW);                            // All force pins initially off
+  digitalWrite(ST3_FORCE_GPIO, LOW);
+  digitalWrite(ST4_FORCE_GPIO, LOW);
+  digitalWrite(SR1_FORCE_GPIO, LOW);
+  digitalWrite(SR2_FORCE_GPIO, LOW);
+  digitalWrite(SR3_FORCE_GPIO, LOW);
+
   Serial.begin(115200);
   delay(500);                                                   //Take some time to open up the Serial Monitor
   //Increment boot number and print it every reboot
@@ -471,12 +517,6 @@ void loop() {
         send_message(ACK_HUB, received_msg_id);
         break;
       case STATUS:
-        ST2_temp = read_temperature(ST2_FORCE_GPIO, ST2_MEASURE_GPIO);
-        ST3_temp = read_temperature(ST3_FORCE_GPIO, ST3_MEASURE_GPIO);
-        ST4_temp = read_temperature(ST4_FORCE_GPIO, ST4_MEASURE_GPIO);
-        SR1_value = read_conductivity(SR1_FORCE_GPIO, SR1_MEASURE_GPIO);
-        SR2_value = read_conductivity(SR2_FORCE_GPIO, SR2_MEASURE_GPIO);
-        SR3_value = read_conductivity(SR3_FORCE_GPIO, SR3_MEASURE_GPIO);
         send_message(STATUS, received_msg_id);
         break;
       default:
