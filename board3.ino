@@ -25,12 +25,21 @@ RTC_DATA_ATTR int FL3_liters = 0;                             // number of liter
 #define TIME_TO_SLEEP  60           /* Time ESP32 will go to sleep (in seconds) */
 RTC_DATA_ATTR int bootCount = 0;
 //// PH sensor reading variable ////
-float pH_value = 4;                                       // pH value read from the pH sensor (reliable range: 4.5 <-> 9.5)
+float pH_value = 4.6;                                       // pH value read from the pH sensor (reliable range: 4.5 <-> 9.5)
 //// Electrovalves status variables ////
 int EV2_status = 0;
 int EV3_status = 0;
 int EV4_status = 0;
 int EV5_status = 0;
+int RA1_status = 0;
+//// Conducibility sensors readouts ////
+float SR1_value = 0;
+float SR2_value = 0;
+float SR3_value = 0;
+//// Temperature sensors readouts ////
+float ST2_temp = 0;
+float ST3_temp = 0;
+float ST4_temp = 0;
 //// firmware version of the device and device id ////
 #define SW_VERSION "0.1"
 #define DEVICE_ID "geniale board 3"     
@@ -66,11 +75,25 @@ RTC_DATA_ATTR int messageCount = 1;                // tells the number of the se
 ////  I/Os definitions    ////
 #define FL2_GPIO   27       // Flow sensor FL2 connected to GPIO27
 #define FL3_GPIO   26       // Flow sensor FL3 connected to GPIO26
-#define EV2_GPIO   15  
-#define EV3_GPIO   13  
-#define EV4_GPIO   14  
-#define EV5_GPIO   12  
-#define LED   5                      // Status led connected to GPIO5
+#define EV2_GPIO   15       // Electrovalve EV2 connected to GPIO15
+#define EV3_GPIO   13       // Electrovalve EV3 connected to GPIO13
+#define EV4_GPIO   14       // Electrovalve EV4 connected to GPIO14
+#define EV5_GPIO   12       // Electrovalve EV5 connected to GPIO12
+#define RA1_GPIO   21       // Electrovalve RA1 connected to GPIO21
+#define ST2_FORCE_GPIO 23   // Temperature sensor ST2 force pin
+#define ST3_FORCE_GPIO 22   // Temperature sensor ST3 force pin
+#define ST4_FORCE_GPIO 19   // Temperature sensor ST4 force pin
+#define SR1_FORCE_GPIO 18   // Conductivity sensor SR1 force pin
+#define SR2_FORCE_GPIO 17   // Conductivity sensor SR2 force pin
+#define SR3_FORCE_GPIO 16   // Conductivity sensor SR3 force pin
+#define ST2_MEASURE_GPIO 39 // Temperature sensor ST2 measure pin
+#define ST3_MEASURE_GPIO 34 // Temperature sensor ST3 measure pin
+#define ST4_MEASURE_GPIO 35 // Temperature sensor ST4 measure pin
+#define SR1_MEASURE_GPIO 32 // Temperature sensor SR1 measure pin
+#define SR2_MEASURE_GPIO 33 // Temperature sensor SR2 measure pin
+#define SR3_MEASURE_GPIO 25 // Temperature sensor SR3 measure pin
+#define SPH1_GPIO 36        // pH sensor SPH1 connected to VP 
+#define LED   5             // Status led connected to GPIO5
 
 static void SendConfirmationCallback(IOTHUB_CLIENT_CONFIRMATION_RESULT result)
 {
@@ -100,6 +123,7 @@ static void MessageCallback(const char* payLoad, int size)
           EV3_status = doc["EV3"];
           EV4_status = doc["EV4"];
           EV5_status = doc["EV5"];
+          RA1_status = doc["RA1"];
       }
     }
   }
@@ -277,13 +301,15 @@ void setup_with_wifi() {
 void setup_just_to_update_flux() {
   int old_FL2_liters = 0;
   int old_FL3_liters = 0;
+  int current_FL2_liters;
+  int current_FL3_liters;
   while(true){
-    delay(2000);
-    int current_FL2_liters = get_FL2_liters();
-    int current_FL3_liters = get_FL3_liters();
+    delay(8000);
+    current_FL2_liters = get_FL2_liters();
+    current_FL3_liters = get_FL3_liters();
     if(current_FL2_liters>old_FL2_liters || current_FL3_liters>old_FL3_liters) {
-      Serial.println("FL2 Currently flushing liters "+ String(current_FL2_liters));
-      Serial.println("FL3 Currently flushing liters "+ String(current_FL3_liters));
+      Serial.println("FL2: "+ String(current_FL2_liters));
+      Serial.println("FL3: "+ String(current_FL3_liters));
     }
     else {
       Serial.println("Water not flushed anymore, going back to sleep");
@@ -291,7 +317,7 @@ void setup_just_to_update_flux() {
       FL3_liters += current_FL3_liters;
       esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);                
       esp_deep_sleep_start();
-    }
+    } 
     old_FL2_liters = current_FL2_liters;
     old_FL3_liters = current_FL3_liters;
   }
@@ -299,31 +325,31 @@ void setup_just_to_update_flux() {
 
 void setup() {
   pinMode(FL2_GPIO, INPUT);                            // the output of the FL2 flow sensor is open collector (MUST USE EXTERNAL PULL UP!!)
+  pinMode(FL3_GPIO, INPUT);                            // the output of the FL3 flow sensor is open collector (MUST USE EXTERNAL PULL UP!!)
   initPulseCounters();
   pinMode(EV2_GPIO, INPUT);
   pinMode(EV3_GPIO, OUTPUT);     
   pinMode(EV4_GPIO, OUTPUT);
   pinMode(EV5_GPIO, OUTPUT);
+  pinMode(RA1_GPIO, OUTPUT);
   digitalWrite(EV2_GPIO, LOW);                                   // All electrovalves are initially off
   digitalWrite(EV3_GPIO, LOW);
   digitalWrite(EV4_GPIO, LOW);
   digitalWrite(EV5_GPIO, LOW);
+  digitalWrite(RA1_GPIO, LOW);
   Serial.begin(115200);
   delay(500);                                                   //Take some time to open up the Serial Monitor
   //Increment boot number and print it every reboot
   ++bootCount;
   Serial.println("Boot number: " + String(bootCount));
-  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
   // PERFORM ACTIONS DEPENDING ON WAKEUP REASON //
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); 
   esp_sleep_wakeup_cause_t wakeup_reason;
   wakeup_reason = esp_sleep_get_wakeup_cause();
   switch(wakeup_reason)
   {
-    //case ESP_SLEEP_WAKEUP_EXT0 : 
-    //Serial.println("Wakeup caused by external signal using RTC_IO"); 
-    //break;
     case ESP_SLEEP_WAKEUP_EXT1 : 
-    Serial.println("Wakeup caused by external signal using RTC_CNTL");     
+    Serial.println("Wakeup caused by flux sensor");     
     setup_just_to_update_flux();
     break;
     case ESP_SLEEP_WAKEUP_TIMER : 
@@ -331,7 +357,7 @@ void setup() {
     setup_with_wifi();
     break;
     default:
-    Serial.println("It's the first boot"); 
+    Serial.println("It's the first boot");
     setup_with_wifi();
     break;
   }
@@ -340,20 +366,28 @@ void setup() {
 void send_message(int reply_type, int msgid) {
 if (hasWifi && hasIoTHub)
   {
-      StaticJsonDocument<256> msgtosend;            // pre-allocate 256 bytes of memory for the json message
+      StaticJsonDocument<512> msgtosend;            // pre-allocate 512 bytes of memory for the json message
       msgtosend["message_id"] = msgid;
       msgtosend["timestamp"] = UTC.dateTime(ISO8601);
       msgtosend["message_type"] = reply_type;
       msgtosend["device_id"] = DEVICE_ID;
       msgtosend["iot_module_software_version"] = SW_VERSION;
+      msgtosend["SR1"] = SR1_value;
+      msgtosend["SR2"] = SR2_value;
+      msgtosend["SR3"] = SR3_value;
+      msgtosend["ST2"] = ST2_temp;
+      msgtosend["ST3"] = ST3_temp;
+      msgtosend["ST4"] = ST4_temp;
+      msgtosend["SPH1"] = pH_value;
+      msgtosend["FL2"] = FL2_liters;
+      msgtosend["FL3"] = FL3_liters;      
       msgtosend["EV2"] = EV2_status;
       msgtosend["EV3"] = EV3_status;                   
       msgtosend["EV4"] = EV4_status;   
       msgtosend["EV5"] = EV5_status;   
-      msgtosend["SPH1"] = pH_value;
-      msgtosend["FL2"] = FL2_liters;
-      msgtosend["FL3"] = FL3_liters;
-      char out[256];
+      msgtosend["RA1"] = RA1_status;   
+
+      char out[512];
       int msgsize =serializeJson(msgtosend, out);
       //Serial.println(msgsize);
       Serial.println("Sending message to HUB:");
@@ -375,6 +409,11 @@ void loop() {
         send_message(ACK_HUB, received_msg_id);
         break;
       case STATUS:
+        digitalWrite(EV2_GPIO, EV2_status);
+        digitalWrite(EV3_GPIO, EV3_status);                   
+        digitalWrite(EV4_GPIO, EV4_status);   
+        digitalWrite(EV5_GPIO, EV5_status);   
+        digitalWrite(RA1_GPIO, RA1_status);
         send_message(STATUS, received_msg_id);
         break;
       default:
