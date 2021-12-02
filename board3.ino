@@ -5,15 +5,20 @@
 #include <ArduinoJson.h>
 #include <ezTime.h>     
 
-//// PULSE COUNTER MODULE ////
-#define PCNT_FREQ_UNIT      PCNT_UNIT_0     // select ESP32 pulse counter unit 0 (out of 0 to 7 indipendent counting units)
+//// PULSE COUNTER MODULES ////
+#define PCNT0_FREQ_UNIT      PCNT_UNIT_0     // select ESP32 pulse counter unit 0 (out of 0 to 7 indipendent counting units) for FL2
+#define PCNT1_FREQ_UNIT      PCNT_UNIT_1     // select ESP32 pulse counter unit 1 for FL3
                                             // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/pcnt.html
-int16_t PulseCounter =     0;                                // pulse counter, max. value is 65536
-int OverflowCounter =      0;                                // pulse counter overflow counter
+int16_t PulseCounter0 =     0;                                // pulse counter 0 for FL2, max. value is 65536
+int16_t PulseCounter1 =     0;                                // pulse counter 1 for FL3, max. value is 65536
+int OverflowCounter0 =      0;                                // pulse counter overflow counter 0
+int OverflowCounter1 =      0;                                // pulse counter overflow counter 1
 int PCNT_H_LIM_VAL =       30000;                            // upper limit of counting  max. 32767, write +1 to overflow counter, when reached 
 uint16_t PCNT_FILTER_VAL=  0;                             // filter (damping, inertia) value for avoiding glitches in the count, max. 1023
-pcnt_isr_handle_t user_isr_handle = NULL;                 // user interrupt handler (not used)
-RTC_DATA_ATTR int liters = 0;                             // number of liters that pass through the flux sensor
+pcnt_isr_handle_t user_isr_handle0 = NULL;                 // user interrupt handler (not used)
+pcnt_isr_handle_t user_isr_handle1 = NULL;                 // user interrupt handler (not used)
+RTC_DATA_ATTR int FL2_liters = 0;                             // number of liters that pass through the flux sensor FL2
+RTC_DATA_ATTR int FL3_liters = 0;                             // number of liters that pass through the flux sensor FL3
 #define PULSES_PER_LITER 165                              // 165 pulses from the flux sensor tell that a liter has passed
 //// Deep sleep params ////
 #define uS_TO_S_FACTOR 1000000ULL   /* Conversion factor for micro seconds to seconds */
@@ -54,12 +59,13 @@ static bool hasIoTHub = false;
 static bool hasWifi = false;
 #define INTERVAL 10000               // IoT message sending interval in ms
 #define MESSAGE_MAX_LEN 256
-int messageCount = 1;                // tells the number of the sent message
+RTC_DATA_ATTR int messageCount = 1;                // tells the number of the sent message
 //static bool messageSending = true;
 //static uint64_t send_interval_ms;
 
 ////  I/Os definitions    ////
-#define PCNT_INPUT_SIG_IO   27       // Flow sensor connected to GPIO27
+#define FL2_GPIO   27       // Flow sensor FL2 connected to GPIO27
+#define FL3_GPIO   26       // Flow sensor FL3 connected to GPIO26
 #define EV2_GPIO   15  
 #define EV3_GPIO   13  
 #define EV4_GPIO   14  
@@ -146,45 +152,74 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
   }
 */
 
-//// PULSE COUNTER OVERFLOW ISR ////
-  void IRAM_ATTR CounterOverflow(void *arg) {                  // Interrupt for overflow of pulse counter
-    OverflowCounter = OverflowCounter + 1;                     // increase overflow counter
-    PCNT.int_clr.val = BIT(PCNT_FREQ_UNIT);                    // clear overflow flag
-    pcnt_counter_clear(PCNT_FREQ_UNIT);                        // zero and reset of pulse counter unit
+//// PULSE COUNTER OVERFLOW ISR FOR FL2 ////
+  void IRAM_ATTR CounterOverflow0(void *arg) {                  // Interrupt for overflow of pulse counter
+    OverflowCounter0 = OverflowCounter0 + 1;                     // increase overflow counter
+    PCNT.int_clr.val = BIT(PCNT0_FREQ_UNIT);                    // clear overflow flag
+    pcnt_counter_clear(PCNT0_FREQ_UNIT);                        // zero and reset of pulse counter unit
   }
 
-  void initPulseCounter (){                                    // initialise pulse counter
+  //// PULSE COUNTER OVERFLOW ISR FOR FL3 ////
+  void IRAM_ATTR CounterOverflow1(void *arg) {                  // Interrupt for overflow of pulse counter
+    OverflowCounter1 = OverflowCounter1 + 1;                     // increase overflow counter
+    PCNT.int_clr.val = BIT(PCNT1_FREQ_UNIT);                    // clear overflow flag
+    pcnt_counter_clear(PCNT1_FREQ_UNIT);                        // zero and reset of pulse counter unit
+  }
+
+  void initPulseCounters (){                                    // initialise pulse counters
+  //// INITIALIZE PULSE COUNTER FOR FL2 ////
     pcnt_config_t pcntFreqConfig = { };                        // Instance of pulse counter
-    pcntFreqConfig.pulse_gpio_num = PCNT_INPUT_SIG_IO;         // pin assignment for pulse counter
+    pcntFreqConfig.pulse_gpio_num = FL2_GPIO;                  // pin assignment for pulse counter
     pcntFreqConfig.pos_mode = PCNT_COUNT_INC;                  // count rising edges (=change from low to high logical level) as pulses
     pcntFreqConfig.neg_mode = PCNT_COUNT_DIS;                  // do nothing on falling edges
     pcntFreqConfig.counter_h_lim = PCNT_H_LIM_VAL;             // set upper limit of counting 
-    pcntFreqConfig.unit = PCNT_FREQ_UNIT;                      // select ESP32 pulse counter unit 0
+    pcntFreqConfig.unit = PCNT0_FREQ_UNIT;                      // select ESP32 pulse counter unit 0
     pcntFreqConfig.channel = PCNT_CHANNEL_0;                   // select channel 0 of pulse counter unit 0
     pcnt_unit_config(&pcntFreqConfig);                         // configure rigisters of the pulse counter
-  
-    pcnt_counter_pause(PCNT_FREQ_UNIT);                        // pause pulse counter unit
-    pcnt_counter_clear(PCNT_FREQ_UNIT);                        // zero and reset of pulse counter unit
-  
-    pcnt_event_enable(PCNT_FREQ_UNIT, PCNT_EVT_H_LIM);         // enable event for interrupt on reaching upper limit of counting
-    pcnt_isr_register(CounterOverflow, NULL, 0, &user_isr_handle);  // configure register overflow interrupt handler
-    pcnt_intr_enable(PCNT_FREQ_UNIT);                          // enable overflow interrupt
+    pcnt_counter_pause(PCNT0_FREQ_UNIT);                        // pause pulse counter unit
+    pcnt_counter_clear(PCNT0_FREQ_UNIT);                        // zero and reset of pulse counter unit
+    pcnt_event_enable(PCNT0_FREQ_UNIT, PCNT_EVT_H_LIM);         // enable event for interrupt on reaching upper limit of counting
+    pcnt_isr_register(CounterOverflow0, NULL, 0, &user_isr_handle0);  // configure register overflow interrupt handler
+    pcnt_intr_enable(PCNT0_FREQ_UNIT);                          // enable overflow interrupt
+    pcnt_set_filter_value(PCNT0_FREQ_UNIT, PCNT_FILTER_VAL);    // set damping, inertia 
+    pcnt_filter_enable(PCNT0_FREQ_UNIT);                        // enable counter glitch filter (damping)
+    pcnt_counter_resume(PCNT0_FREQ_UNIT);                       // resume counting on pulse counter unit
 
-    pcnt_set_filter_value(PCNT_FREQ_UNIT, PCNT_FILTER_VAL);    // set damping, inertia 
-    pcnt_filter_enable(PCNT_FREQ_UNIT);                        // enable counter glitch filter (damping)
-  
-    pcnt_counter_resume(PCNT_FREQ_UNIT);                       // resume counting on pulse counter unit
+  //// INITIALIZE PULSE COUNTER FOR FL3 ////
+    pcntFreqConfig = { };                                      // Instance of pulse counter
+    pcntFreqConfig.pulse_gpio_num = FL3_GPIO;                  // pin assignment for pulse counter
+    pcntFreqConfig.pos_mode = PCNT_COUNT_INC;                  // count rising edges (=change from low to high logical level) as pulses
+    pcntFreqConfig.neg_mode = PCNT_COUNT_DIS;                  // do nothing on falling edges
+    pcntFreqConfig.counter_h_lim = PCNT_H_LIM_VAL;             // set upper limit of counting 
+    pcntFreqConfig.unit = PCNT1_FREQ_UNIT;                      // select ESP32 pulse counter unit 1
+    pcntFreqConfig.channel = PCNT_CHANNEL_0;                   // select channel 0 of pulse counter unit 0
+    pcnt_unit_config(&pcntFreqConfig);                         // configure rigisters of the pulse counter
+    pcnt_counter_pause(PCNT1_FREQ_UNIT);                        // pause pulse counter unit
+    pcnt_counter_clear(PCNT1_FREQ_UNIT);                        // zero and reset of pulse counter unit
+    pcnt_event_enable(PCNT1_FREQ_UNIT, PCNT_EVT_H_LIM);         // enable event for interrupt on reaching upper limit of counting
+    pcnt_isr_register(CounterOverflow1, NULL, 0, &user_isr_handle1);  // configure register overflow interrupt handler
+    pcnt_intr_enable(PCNT1_FREQ_UNIT);                          // enable overflow interrupt
+    pcnt_set_filter_value(PCNT1_FREQ_UNIT, PCNT_FILTER_VAL);    // set damping, inertia 
+    pcnt_filter_enable(PCNT1_FREQ_UNIT);                        // enable counter glitch filter (damping)
+    pcnt_counter_resume(PCNT1_FREQ_UNIT);                       // resume counting on pulse counter unit
   }
    
-  void Reset_PCNT() {                                          // function resetting counter 
-    OverflowCounter = 0;                                       // set overflow counter to zero
-    pcnt_counter_clear(PCNT_FREQ_UNIT);                        // zero and reset of pulse counter unit
+  void Reset_PCNT0() {                                          // function resetting counter 
+    OverflowCounter0 = 0;                                       // set overflow counter to zero
+    pcnt_counter_clear(PCNT0_FREQ_UNIT);                        // zero and reset of pulse counter unit
   }
-
-  int get_liters(){                                    // converts the pulses received from fl1 to liters
-      pcnt_get_counter_value(PCNT_FREQ_UNIT, &PulseCounter);     // get pulse counter value - maximum value is 16 bit
-      return ( OverflowCounter*PCNT_H_LIM_VAL + PulseCounter ) / PULSES_PER_LITER;
+  void Reset_PCNT1() {                                          // function resetting counter 
+  OverflowCounter1 = 0;                                       // set overflow counter to zero
+  pcnt_counter_clear(PCNT1_FREQ_UNIT);                        // zero and reset of pulse counter unit
   }
+  int get_FL2_liters(){                                              // converts the pulses received from fl1 to liters
+      pcnt_get_counter_value(PCNT0_FREQ_UNIT, &PulseCounter0);     // get pulse counter value - maximum value is 16 bit
+      return ( OverflowCounter0*PCNT_H_LIM_VAL + PulseCounter0 ) / PULSES_PER_LITER;
+  }
+  int get_FL3_liters(){                                              // converts the pulses received from fl1 to liters
+    pcnt_get_counter_value(PCNT1_FREQ_UNIT, &PulseCounter1);         // get pulse counter value - maximum value is 16 bit
+    return ( OverflowCounter1*PCNT_H_LIM_VAL + PulseCounter1 ) / PULSES_PER_LITER;
+}
 
 void setup_with_wifi() {
   // configure status LED PWM functionalitites
@@ -234,30 +269,37 @@ void setup_with_wifi() {
   randomSeed(analogRead(0));
   //send_interval_ms = millis();
   ledcWrite(LED_CHANNEL, OFF);
-  Serial.println("Waiting for messages from HUB...");
+  Serial.println("Sending status message to HUB...");
+  send_message(STATUS, messageCount++);
+  Serial.println("Waiting for sleep message from HUB...");
 }
+
 void setup_just_to_update_flux() {
-  int old_liters = 0;
+  int old_FL2_liters = 0;
+  int old_FL3_liters = 0;
   while(true){
     delay(2000);
-    int current_liters = get_liters();
-    if(current_liters>old_liters) {
-      Serial.println("Currently flushing liters");
-      Serial.println(current_liters);
+    int current_FL2_liters = get_FL2_liters();
+    int current_FL3_liters = get_FL3_liters();
+    if(current_FL2_liters>old_FL2_liters || current_FL3_liters>old_FL3_liters) {
+      Serial.println("FL2 Currently flushing liters "+ String(current_FL2_liters));
+      Serial.println("FL3 Currently flushing liters "+ String(current_FL3_liters));
     }
     else {
       Serial.println("Water not flushed anymore, going back to sleep");
-      liters += current_liters;
-      esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, 1);                 //1 = High, 0 = Low
+      FL2_liters += current_FL2_liters;
+      FL3_liters += current_FL3_liters;
+      esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);                
       esp_deep_sleep_start();
     }
-    old_liters = current_liters;
+    old_FL2_liters = current_FL2_liters;
+    old_FL3_liters = current_FL3_liters;
   }
 }
 
 void setup() {
-  pinMode(PCNT_INPUT_SIG_IO, INPUT);                            // the output of the flow sensor is open collector (MUST USE EXTERNAL PULL UP!!)
-  initPulseCounter();
+  pinMode(FL2_GPIO, INPUT);                            // the output of the FL2 flow sensor is open collector (MUST USE EXTERNAL PULL UP!!)
+  initPulseCounters();
   pinMode(EV2_GPIO, INPUT);
   pinMode(EV3_GPIO, OUTPUT);     
   pinMode(EV4_GPIO, OUTPUT);
@@ -277,12 +319,12 @@ void setup() {
   wakeup_reason = esp_sleep_get_wakeup_cause();
   switch(wakeup_reason)
   {
-    case ESP_SLEEP_WAKEUP_EXT0 : 
-    Serial.println("Wakeup caused by external signal using RTC_IO"); 
-    setup_just_to_update_flux();
-    break;
+    //case ESP_SLEEP_WAKEUP_EXT0 : 
+    //Serial.println("Wakeup caused by external signal using RTC_IO"); 
+    //break;
     case ESP_SLEEP_WAKEUP_EXT1 : 
-    Serial.println("Wakeup caused by external signal using RTC_CNTL"); 
+    Serial.println("Wakeup caused by external signal using RTC_CNTL");     
+    setup_just_to_update_flux();
     break;
     case ESP_SLEEP_WAKEUP_TIMER : 
     Serial.println("Wakeup caused by timer"); 
@@ -309,7 +351,8 @@ if (hasWifi && hasIoTHub)
       msgtosend["EV4"] = EV4_status;   
       msgtosend["EV5"] = EV5_status;   
       msgtosend["SPH1"] = pH_value;
-      msgtosend["FL2"] = liters;
+      msgtosend["FL2"] = FL2_liters;
+      msgtosend["FL3"] = FL3_liters;
       char out[256];
       int msgsize =serializeJson(msgtosend, out);
       //Serial.println(msgsize);
@@ -340,7 +383,7 @@ void loop() {
         break;
     }
       Serial.println("Going into deep sleep");
-      esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, 1);                 //1 = High, 0 = Low
+      esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);         
       esp_deep_sleep_start();
   }
 }
