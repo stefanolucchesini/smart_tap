@@ -6,6 +6,9 @@
 #include <ezTime.h>     
 #include <driver/adc.h>
 
+#define DEBUG true // flag to turn on/off debugging over serial monitor
+#define DEBUG_SERIAL if(DEBUG)Serial
+
 //// PULSE COUNTER MODULES ////
 #define PCNT0_FREQ_UNIT      PCNT_UNIT_0     // select ESP32 pulse counter unit 0 (out of 0 to 7 indipendent counting units) for FL2
 #define PCNT1_FREQ_UNIT      PCNT_UNIT_1     // select ESP32 pulse counter unit 1 for FL3
@@ -124,20 +127,20 @@ static void SendConfirmationCallback(IOTHUB_CLIENT_CONFIRMATION_RESULT result)
 {
   if (result == IOTHUB_CLIENT_CONFIRMATION_OK)
   {
-    //Serial.println("Send Confirmation Callback finished.");
+    //DEBUG_SERIAL.println("Send Confirmation Callback finished.");
   }
 }
 
 static void MessageCallback(const char* payLoad, int size)
 {
   ledcWrite(LED_CHANNEL, ON);
-  Serial.println("Received message from HUB");
+  DEBUG_SERIAL.println("Received message from HUB");
   if (size < 256) { 
     StaticJsonDocument<256> doc;
     DeserializationError error = deserializeJson(doc, payLoad);
     if (error) {
-      Serial.print(F("deserializeJson() failed: "));
-      Serial.println(error.f_str());
+      DEBUG_SERIAL.print(F("deserializeJson() failed: "));
+      DEBUG_SERIAL.println(error.f_str());
     }
     else {  
     new_request = true;
@@ -152,7 +155,7 @@ static void MessageCallback(const char* payLoad, int size)
       }
     }
   }
-  else Serial.println("Cannot parse message, too long!");
+  else DEBUG_SERIAL.println("Cannot parse message, too long!");
 }
 
 /* NOT USED - DEVICE TWIN CALLBACK
@@ -166,7 +169,7 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
   memcpy(temp, payLoad, size);
   temp[size] = '\0';
   // Display Twin message.
-  Serial.println(temp);
+  DEBUG_SERIAL.println(temp);
   free(temp);
 }
 */
@@ -275,7 +278,7 @@ void setup_with_wifi() {
   ledcSetup(LED_CHANNEL, LED_PWM_FREQ, RESOLUTION);
   ledcAttachPin(LED, LED_CHANNEL);                              // Attach PWM module to status LED
   ledcWrite(LED_CHANNEL, BLINK_5HZ);                            // LED initially blinks at 5Hz
-  Serial.println("Reading sensor values...");
+  DEBUG_SERIAL.println("Reading sensor values...");
   // Sample sensors before enabling wifi (ADC on pin 25 does not work with wifi on)
   ST2_temp = read_temperature(ST2_FORCE_GPIO, ST2_MEASURE_GPIO);
   ST3_temp = read_temperature(ST3_FORCE_GPIO, ST3_MEASURE_GPIO);
@@ -284,7 +287,7 @@ void setup_with_wifi() {
   SR2_value = read_conductivity(SR2_FORCE_GPIO, SR2_MEASURE_GPIO);
   SR3_value = read_conductivity(SR3_FORCE_GPIO, SR3_MEASURE_GPIO);
   pH_value = read_pH(SPH1_GPIO);
-  Serial.println("Starting WiFi connection...");
+  DEBUG_SERIAL.println("Starting WiFi connection...");
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
   WiFiManager wm;
   //wm.resetSettings();  // reset settings - wipe stored credentials for testing
@@ -292,26 +295,26 @@ void setup_with_wifi() {
   res = wm.autoConnect("GENIALE brd3 setup"); // Generates a pwd-free ap for the user to connect and tell Wi-Fi credentials
   //res = wm.autoConnect("AutoConnectAP","password"); // Generates a pwd-protected ap for the user to connect and tell Wi-Fi credentials
   if(!res) {
-      Serial.println("Failed to connect to wifi");
+      DEBUG_SERIAL.println("Failed to connect to wifi");
       delay(10000);
       ESP.restart();
   } 
   else {
       //if you get here you have connected to the WiFi    
-      Serial.println("Connected to wifi!");
+      DEBUG_SERIAL.println("Connected to wifi!");
       ledcWrite(LED_CHANNEL, ON);
       // Wait for ezTime to get its time synchronized
 	    waitForSync();
-      Serial.println("UTC Time in ISO8601: " + UTC.dateTime(ISO8601));
+      DEBUG_SERIAL.println("UTC Time in ISO8601: " + UTC.dateTime(ISO8601));
       hasWifi = true;
     }
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-  Serial.println("IoT Hub init");
+  DEBUG_SERIAL.println("IP address: ");
+  DEBUG_SERIAL.println(WiFi.localIP());
+  DEBUG_SERIAL.println("IoT Hub init");
   if (!Esp32MQTTClient_Init((const uint8_t*)connectionString, true))
   {
     hasIoTHub = false;
-    Serial.println("Initializing IoT hub failed.");
+    DEBUG_SERIAL.println("Initializing IoT hub failed.");
     return;
   }
   hasIoTHub = true;
@@ -323,9 +326,9 @@ void setup_with_wifi() {
   randomSeed(analogRead(0));
   //send_interval_ms = millis();
   ledcWrite(LED_CHANNEL, OFF);
-  Serial.println("Sending status message to HUB...");
+  DEBUG_SERIAL.println("Sending status message to HUB...");
   send_message(STATUS, messageCount++);
-  Serial.println("Waiting for a message from HUB and going to sleep...");
+  DEBUG_SERIAL.println("Waiting for a message from HUB and going to sleep...");
 }
 
 void setup_just_to_update_flux() {
@@ -338,11 +341,11 @@ void setup_just_to_update_flux() {
     current_FL2_liters = get_FL2_liters();
     current_FL3_liters = get_FL3_liters();
     if(current_FL2_liters>old_FL2_liters || current_FL3_liters>old_FL3_liters) {
-      Serial.println("FL2: "+ String(current_FL2_liters));
-      Serial.println("FL3: "+ String(current_FL3_liters));
+      DEBUG_SERIAL.println("FL2: "+ String(current_FL2_liters));
+      DEBUG_SERIAL.println("FL3: "+ String(current_FL3_liters));
     }
     else {
-      Serial.println("Water not flushed anymore, going back to sleep");
+      DEBUG_SERIAL.println("Water not flushed anymore, going back to sleep");
       FL2_liters += current_FL2_liters;
       FL3_liters += current_FL3_liters;
       esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);                
@@ -365,7 +368,7 @@ float read_temperature(int GPIO_FORCE, int GPIO_MEASURE) {
         delay(TEMP_INTERVAL); 
       }
   digitalWrite(GPIO_FORCE, LOW);
-  //Serial.println(String("Temperature in deg C: ") + String(mean/TEMP_SAMPLES, 2));
+  DEBUG_SERIAL.println(String("Temperature in deg C: ") + String(mean/TEMP_SAMPLES, 2) + String(" On GPIO: ") + String(GPIO_MEASURE));
   return roundf(mean/(TEMP_SAMPLES/10)) / 10;   //return the temperature with a single decimal place
 }
 
@@ -380,9 +383,8 @@ float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
         mean += conductivity;
         delay(COND_INTERVAL); 
       }
-  //Serial.println(String("Raw cond val: ") + String(mean/COND_SAMPLES) + String(" On GPIO: ") + String(GPIO_MEASURE));
-  digitalWrite(GPIO_FORCE, LOW);
-  //Serial.println(String("Conductivity in milliSiemens: ") + String(mean/COND_SAMPLES, 2));
+    digitalWrite(GPIO_FORCE, LOW);
+  DEBUG_SERIAL.println(String("Conductivity in milliSiemens: ") + String(mean/COND_SAMPLES, 2) + String(" On GPIO: ") + String(GPIO_MEASURE));
   return roundf(mean/(COND_SAMPLES/10)) / 10;   //return the conductivity with a single decimal place
 }
 
@@ -396,8 +398,7 @@ float read_pH(int GPIO_MEASURE) {
         mean += pH;
         delay(pH_INTERVAL); 
       }
-  //Serial.println(String("Raw ph val ") + String(mean/pH_SAMPLES) + String(" On GPIO: ") + String(GPIO_MEASURE));    
-  //Serial.println(String("pH value: ") + String(mean/pH_SAMPLES, 2));
+  DEBUG_SERIAL.println(String("pH value: ") + String(mean/pH_SAMPLES, 2) + String(" On GPIO: ") + String(GPIO_MEASURE));
   return roundf(mean/(pH_SAMPLES/10)) / 10;   //return the pH with a single decimal place
 }
 
@@ -434,11 +435,13 @@ void setup() {
   digitalWrite(SR1_FORCE_GPIO, LOW);
   digitalWrite(SR2_FORCE_GPIO, LOW);
   digitalWrite(SR3_FORCE_GPIO, LOW);
-  Serial.begin(115200);
-  delay(500);                                                   //Take some time to open up the Serial Monitor
+  DEBUG_SERIAL.begin(115200);
+  #if DEBUG == true
+    delay(500);                                                 //Take some time to open up the Serial Monitor
+  #endif
   //Increment boot number and print it every reboot
   ++bootCount;
-  Serial.println("Boot number: " + String(bootCount));
+  DEBUG_SERIAL.println("Boot number: " + String(bootCount));
   // PERFORM ACTIONS DEPENDING ON WAKEUP REASON //
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); 
   esp_sleep_wakeup_cause_t wakeup_reason;
@@ -446,15 +449,15 @@ void setup() {
   switch(wakeup_reason)
   {
     case ESP_SLEEP_WAKEUP_EXT1 : 
-    Serial.println("Wakeup caused by flux sensor");     
+    DEBUG_SERIAL.println("Wakeup caused by flux sensor");     
     setup_just_to_update_flux();
     break;
     case ESP_SLEEP_WAKEUP_TIMER : 
-    Serial.println("Wakeup caused by timer"); 
+    DEBUG_SERIAL.println("Wakeup caused by timer"); 
     setup_with_wifi();
     break;
     default:
-    Serial.println("It's the first boot");
+    DEBUG_SERIAL.println("It's the first boot");
     setup_with_wifi();
     break;
   }
@@ -486,11 +489,11 @@ if (hasWifi && hasIoTHub)
 
       char out[512];
       int msgsize =serializeJson(msgtosend, out);
-      //Serial.println(msgsize);
-      Serial.println("Sending message to HUB:");
-      Serial.println(out);
+      //DEBUG_SERIAL.println(msgsize);
       EVENT_INSTANCE* message = Esp32MQTTClient_Event_Generate(out, MESSAGE);
       Esp32MQTTClient_SendEventInstance(message);
+      DEBUG_SERIAL.println("Message sent to to HUB:");
+      DEBUG_SERIAL.println(out);
       ledcWrite(LED_CHANNEL, OFF);
   }
 }
@@ -514,11 +517,11 @@ void loop() {
         send_message(STATUS, received_msg_id);
         break;
       default:
-        Serial.println("Invalid message type!");
+        DEBUG_SERIAL.println("Invalid message type!");
         ledcWrite(LED_CHANNEL, OFF);
         break;
     }
-      Serial.println("Going into deep sleep");
+      DEBUG_SERIAL.println("Going into deep sleep");
       esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);         
       esp_deep_sleep_start();
   }
