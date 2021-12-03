@@ -33,13 +33,9 @@ int EV4_status = 0;
 int EV5_status = 0;
 int RA1_status = 0;
 //// Conducibility sensors readouts ////
-float SR1_value = 0;
-float SR2_value = 0;
-float SR3_value = 0;
+float SR1_value, SR2_value, SR3_value;
 //// Temperature sensors readouts ////
-float ST2_temp = 0;
-float ST3_temp = 0;
-float ST4_temp = 0;
+float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
 #define SW_VERSION "0.1"
 #define DEVICE_ID "geniale board 3"     
@@ -63,15 +59,15 @@ volatile int received_msg_type = -1;                      // if 0 the device is 
 #define ON 255
 
 //// PH sensor reading variable ////
-float pH_value = 4.6;                                       // pH value read from the pH sensor (typical range: 4.5 <-> 9.5)
+float pH_value;                                       // pH value read from the pH sensor (typical range: 4.5 <-> 9.5)
 // Variables for voltages corresponding to pH values:
-//1107.5 mV correspond to a pH of 4.5 and an ADC read of ...
-//1392.5 mV correspond to a pH of 9.5 and an ADC read of ...
+//1107.5 mV correspond to a pH of 4.5 and an ADC read of 1210
+//1392.5 mV correspond to a pH of 9.5 and an ADC read of 1560
 //pH = Mp * ADC + Qp
-float Mp = 1;   //values still to be computed        
-float Qp = 0;
-#define pH_SAMPLES 10                                  // Number of samples taken to give a pH value
-#define pH_INTERVAL 100                                // Interval of time in ms between two successive samples
+float Mp = 0.0143;           
+float Qp = -12.7857;
+#define pH_SAMPLES 100                                  // Number of samples taken to give a pH value
+#define pH_INTERVAL 10                                // Interval of time in ms between two successive samples
 
 // Variables for voltages corresponding to temperature ranges, for PT100:
 //1190 mV correspond to 0 deg C and an ADC read of 1308
@@ -79,17 +75,17 @@ float Qp = 0;
 //Temperature = M * ADC + Q
 float M = 0.194174;        
 float Q = -259.980583;
-#define TEMP_SAMPLES 10                                // Number of samples taken to give a temperature value
-#define TEMP_INTERVAL 100                              // Interval of time in ms between two successive samples
+#define TEMP_SAMPLES 100                                // Number of samples taken to give a temperature value
+#define TEMP_INTERVAL 10                              // Interval of time in ms between two successive samples
 
 // Variables for voltages corresponding to conductiviy ranges, for ECDICPT/1:
-//227 mV correspond to 5 mS and an ADC read of ...
-//417 mV correspond to 2.5 mS and an ADC read of ...
+//227 mV correspond to 5 mS and an ADC read of 140
+//417 mV correspond to 2.5 mS and an ADC read of 371
 //Conductivity = Mc * ADC + Qc
-float Mc = 1;   //values still to be computed        
-float Qc = 0;
-#define COND_SAMPLES 10                                  // Number of samples taken to give a conductivity value
-#define COND_INTERVAL 100                                // Interval of time in ms between two successive samples
+float Mc = -0.01082;          
+float Qc = 6.51515;
+#define COND_SAMPLES 100                                  // Number of samples taken to give a conductivity value
+#define COND_INTERVAL 10                                // Interval of time in ms between two successive samples
 
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000001;SharedAccessKey=Cn4UylzZVDZD8UGzCTJazR3A9lRLnB+CbK6NkHxCIMk=";
@@ -279,7 +275,6 @@ void setup_with_wifi() {
   ledcSetup(LED_CHANNEL, LED_PWM_FREQ, RESOLUTION);
   ledcAttachPin(LED, LED_CHANNEL);                              // Attach PWM module to status LED
   ledcWrite(LED_CHANNEL, BLINK_5HZ);                            // LED initially blinks at 5Hz
-  Serial.println("ESP32 Device");
   Serial.println("Reading sensor values...");
   // Sample sensors before enabling wifi (ADC on pin 25 does not work with wifi on)
   ST2_temp = read_temperature(ST2_FORCE_GPIO, ST2_MEASURE_GPIO);
@@ -312,7 +307,7 @@ void setup_with_wifi() {
     }
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
-  Serial.println(" > IoT Hub");
+  Serial.println("IoT Hub init");
   if (!Esp32MQTTClient_Init((const uint8_t*)connectionString, true))
   {
     hasIoTHub = false;
@@ -385,7 +380,7 @@ float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
         mean += conductivity;
         delay(COND_INTERVAL); 
       }
-  Serial.println(String("Raw cond val: ") + String(mean/COND_SAMPLES) + String(" On GPIO: ") + String(GPIO_MEASURE));
+  //Serial.println(String("Raw cond val: ") + String(mean/COND_SAMPLES) + String(" On GPIO: ") + String(GPIO_MEASURE));
   digitalWrite(GPIO_FORCE, LOW);
   //Serial.println(String("Conductivity in milliSiemens: ") + String(mean/COND_SAMPLES, 2));
   return roundf(mean/(COND_SAMPLES/10)) / 10;   //return the conductivity with a single decimal place
@@ -401,7 +396,7 @@ float read_pH(int GPIO_MEASURE) {
         mean += pH;
         delay(pH_INTERVAL); 
       }
-  Serial.println(String("Raw ph val ") + String(mean/pH_SAMPLES) + String(" On GPIO: ") + String(GPIO_MEASURE));    
+  //Serial.println(String("Raw ph val ") + String(mean/pH_SAMPLES) + String(" On GPIO: ") + String(GPIO_MEASURE));    
   //Serial.println(String("pH value: ") + String(mean/pH_SAMPLES, 2));
   return roundf(mean/(pH_SAMPLES/10)) / 10;   //return the pH with a single decimal place
 }
@@ -439,7 +434,6 @@ void setup() {
   digitalWrite(SR1_FORCE_GPIO, LOW);
   digitalWrite(SR2_FORCE_GPIO, LOW);
   digitalWrite(SR3_FORCE_GPIO, LOW);
-
   Serial.begin(115200);
   delay(500);                                                   //Take some time to open up the Serial Monitor
   //Increment boot number and print it every reboot
