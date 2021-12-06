@@ -4,7 +4,6 @@
 #include "driver/pcnt.h"   //Pulse counter library
 #include <ArduinoJson.h>
 #include <ezTime.h>     
-#include <driver/adc.h>
 
 #define DEBUG true // flag to turn on/off debugging over serial monitor
 #define DEBUG_SERIAL if(DEBUG)Serial
@@ -15,18 +14,19 @@
                                             // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/pcnt.html
 int16_t PulseCounter0 =     0;                                // pulse counter 0 for FL2, max. value is 65536
 int16_t PulseCounter1 =     0;                                // pulse counter 1 for FL3, max. value is 65536
-int OverflowCounter0 =      0;                                // pulse counter overflow counter 0
-int OverflowCounter1 =      0;                                // pulse counter overflow counter 1
-int PCNT_H_LIM_VAL =       30000;                            // upper limit of counting  max. 32767, write +1 to overflow counter, when reached 
+int OverflowCounter0 =      0;                            // pulse counter overflow counter 0
+int OverflowCounter1 =      0;                            // pulse counter overflow counter 1
+int PCNT_H_LIM_VAL =       30000;                         // upper limit of counting  max. 32767, write +1 to overflow counter, when reached 
 uint16_t PCNT_FILTER_VAL=  0;                             // filter (damping, inertia) value for avoiding glitches in the count, max. 1023
-pcnt_isr_handle_t user_isr_handle0 = NULL;                 // user interrupt handler (not used)
-pcnt_isr_handle_t user_isr_handle1 = NULL;                 // user interrupt handler (not used)
-RTC_DATA_ATTR int FL2_liters = 0;                             // number of liters that pass through the flux sensor FL2
-RTC_DATA_ATTR int FL3_liters = 0;                             // number of liters that pass through the flux sensor FL3
+pcnt_isr_handle_t user_isr_handle0 = NULL;                // user interrupt handler (not used)
+pcnt_isr_handle_t user_isr_handle1 = NULL;                // user interrupt handler (not used)
+RTC_DATA_ATTR int FL2_liters = 0;                         // number of liters that pass through the flux sensor FL2
+RTC_DATA_ATTR int FL3_liters = 0;                         // number of liters that pass through the flux sensor FL3
 #define PULSES_PER_LITER 165                              // 165 pulses from the flux sensor tell that a liter has passed
 //// Deep sleep params ////
-#define uS_TO_S_FACTOR 1000000ULL   /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP  60           /* Time ESP32 will go to sleep (in seconds) */
+#define uS_TO_S_FACTOR 1000000ULL                         // Conversion factor for micro seconds to seconds 
+int time_to_sleep = 360;                                  // Time ESP32 will go to sleep (in seconds) 
+RTC_DATA_ATTR int residual_time_to_sleep;           
 RTC_DATA_ATTR int bootCount = 0;
 
 //// Electrovalves status variables ////
@@ -43,6 +43,8 @@ float ST2_temp, ST3_temp, ST4_temp;
 #define SW_VERSION "0.1"
 #define DEVICE_ID "geniale board 3"     
 //// Other handy variables ////
+volatile int low_power = 0;                               // flag that enables or disables low power mode
+RTC_DATA_ATTR timeval sleepTime;
 volatile bool new_request = false;                        // flag that tells if a new request has arrived from the hub
 volatile int received_msg_id = 0;                         // used for ack mechanism
 volatile int received_msg_type = -1;                      // if 0 the device is sending its status
@@ -152,6 +154,8 @@ static void MessageCallback(const char* payLoad, int size)
           EV4_status = doc["EV4"];
           EV5_status = doc["EV5"];
           RA1_status = doc["RA1"];
+          low_power = doc["low_power"];
+          time_to_sleep = doc["sleep_time"];
       }
     }
   }
@@ -205,20 +209,20 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
 */
 
 //// PULSE COUNTER OVERFLOW ISR FOR FL2 ////
-  void IRAM_ATTR CounterOverflow0(void *arg) {                  // Interrupt for overflow of pulse counter
+  void IRAM_ATTR CounterOverflow0(void *arg) {                       // Interrupt for overflow of pulse counter
     OverflowCounter0 = OverflowCounter0 + 1;                     // increase overflow counter
     PCNT.int_clr.val = BIT(PCNT0_FREQ_UNIT);                    // clear overflow flag
     pcnt_counter_clear(PCNT0_FREQ_UNIT);                        // zero and reset of pulse counter unit
   }
 
   //// PULSE COUNTER OVERFLOW ISR FOR FL3 ////
-  void IRAM_ATTR CounterOverflow1(void *arg) {                  // Interrupt for overflow of pulse counter
+  void IRAM_ATTR CounterOverflow1(void *arg) {                       // Interrupt for overflow of pulse counter
     OverflowCounter1 = OverflowCounter1 + 1;                     // increase overflow counter
     PCNT.int_clr.val = BIT(PCNT1_FREQ_UNIT);                    // clear overflow flag
     pcnt_counter_clear(PCNT1_FREQ_UNIT);                        // zero and reset of pulse counter unit
   }
 
-  void initPulseCounters (){                                    // initialise pulse counters
+  void initPulseCounters (){                                         // initialise pulse counters
   //// INITIALIZE PULSE COUNTER FOR FL2 ////
     pcnt_config_t pcntFreqConfig = { };                        // Instance of pulse counter
     pcntFreqConfig.pulse_gpio_num = FL2_GPIO;                  // pin assignment for pulse counter
@@ -256,19 +260,19 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
     pcnt_counter_resume(PCNT1_FREQ_UNIT);                       // resume counting on pulse counter unit
   }
    
-  void Reset_PCNT0() {                                          // function resetting counter 
+  void Reset_PCNT0() {                                               // function resetting counter 
     OverflowCounter0 = 0;                                       // set overflow counter to zero
     pcnt_counter_clear(PCNT0_FREQ_UNIT);                        // zero and reset of pulse counter unit
   }
-  void Reset_PCNT1() {                                          // function resetting counter 
+  void Reset_PCNT1() {                                               // function resetting counter 
   OverflowCounter1 = 0;                                       // set overflow counter to zero
   pcnt_counter_clear(PCNT1_FREQ_UNIT);                        // zero and reset of pulse counter unit
   }
-  int get_FL2_liters(){                                              // converts the pulses received from fl1 to liters
-      pcnt_get_counter_value(PCNT0_FREQ_UNIT, &PulseCounter0);     // get pulse counter value - maximum value is 16 bit
+  int get_FL2_liters(){                                              // converts the pulses received from fl2 to liters
+      pcnt_get_counter_value(PCNT0_FREQ_UNIT, &PulseCounter0);       // get pulse counter value - maximum value is 16 bit
       return ( OverflowCounter0*PCNT_H_LIM_VAL + PulseCounter0 ) / PULSES_PER_LITER;
   }
-  int get_FL3_liters(){                                              // converts the pulses received from fl1 to liters
+  int get_FL3_liters(){                                              // converts the pulses received from fl3 to liters
     pcnt_get_counter_value(PCNT1_FREQ_UNIT, &PulseCounter1);         // get pulse counter value - maximum value is 16 bit
     return ( OverflowCounter1*PCNT_H_LIM_VAL + PulseCounter1 ) / PULSES_PER_LITER;
 }
@@ -303,7 +307,7 @@ void setup_with_wifi() {
       //if you get here you have connected to the WiFi    
       DEBUG_SERIAL.println("Connected to wifi!");
       ledcWrite(LED_CHANNEL, ON);
-      // Wait for ezTime to get its time synchronized
+      DEBUG_SERIAL.println("Wait for ezTime to get its time synchronized");
 	    waitForSync();
       DEBUG_SERIAL.println("UTC Time in ISO8601: " + UTC.dateTime(ISO8601));
       hasWifi = true;
@@ -328,7 +332,7 @@ void setup_with_wifi() {
   ledcWrite(LED_CHANNEL, OFF);
   DEBUG_SERIAL.println("Sending status message to HUB...");
   send_message(STATUS, messageCount++);
-  DEBUG_SERIAL.println("Waiting for a message from HUB and going to sleep...");
+  DEBUG_SERIAL.println("Waiting for a message from HUB");
 }
 
 void setup_just_to_update_flux() {
@@ -337,7 +341,7 @@ void setup_just_to_update_flux() {
   int current_FL2_liters;
   int current_FL3_liters;
   while(true){
-    delay(8000);
+    delay(5000);
     current_FL2_liters = get_FL2_liters();
     current_FL3_liters = get_FL3_liters();
     if(current_FL2_liters>old_FL2_liters || current_FL3_liters>old_FL3_liters) {
@@ -345,10 +349,20 @@ void setup_just_to_update_flux() {
       DEBUG_SERIAL.println("FL3: "+ String(current_FL3_liters));
     }
     else {
-      DEBUG_SERIAL.println("Water not flushed anymore, going back to sleep");
+      DEBUG_SERIAL.println("Water not flushed anymore");
       FL2_liters += current_FL2_liters;
       FL3_liters += current_FL3_liters;
-      esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);                
+      timeval timeNow, timeDiff;
+      gettimeofday(&timeNow, NULL);
+      timersub(&timeNow,&sleepTime,&timeDiff);
+      DEBUG_SERIAL.println(String("Deep sleep time in s: ") + String(timeDiff.tv_sec));
+      residual_time_to_sleep -= timeDiff.tv_sec;
+      if(residual_time_to_sleep < 0) residual_time_to_sleep = time_to_sleep;      // do not allow negative times
+      DEBUG_SERIAL.println(String("Residual sleep time in s: ") + String(residual_time_to_sleep));
+      esp_sleep_enable_timer_wakeup(residual_time_to_sleep * uS_TO_S_FACTOR);
+      esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);
+      DEBUG_SERIAL.println("Going back to sleep...");
+      gettimeofday(&sleepTime, NULL);                         
       esp_deep_sleep_start();
     } 
     old_FL2_liters = current_FL2_liters;
@@ -443,7 +457,6 @@ void setup() {
   ++bootCount;
   DEBUG_SERIAL.println("Boot number: " + String(bootCount));
   // PERFORM ACTIONS DEPENDING ON WAKEUP REASON //
-  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); 
   esp_sleep_wakeup_cause_t wakeup_reason;
   wakeup_reason = esp_sleep_get_wakeup_cause();
   switch(wakeup_reason)
@@ -485,7 +498,9 @@ if (hasWifi && hasIoTHub)
       msgtosend["EV3"] = EV3_status;                   
       msgtosend["EV4"] = EV4_status;   
       msgtosend["EV5"] = EV5_status;   
-      msgtosend["RA1"] = RA1_status;   
+      msgtosend["RA1"] = RA1_status; 
+      msgtosend["low_power"] = low_power;
+      msgtosend["sleep_time"] = time_to_sleep;   
 
       char out[512];
       int msgsize =serializeJson(msgtosend, out);
@@ -521,8 +536,14 @@ void loop() {
         ledcWrite(LED_CHANNEL, OFF);
         break;
     }
+      if( low_power == true) {
       DEBUG_SERIAL.println("Going into deep sleep");
-      esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);         
+      DEBUG_SERIAL.flush(); 
+      esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);
+      esp_sleep_enable_timer_wakeup(time_to_sleep * uS_TO_S_FACTOR);
+      residual_time_to_sleep = time_to_sleep; 
+      gettimeofday(&sleepTime, NULL);         
       esp_deep_sleep_start();
+      }
   }
 }
