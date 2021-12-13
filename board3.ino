@@ -25,7 +25,7 @@ RTC_DATA_ATTR int FL3_liters = 0;                         // number of liters th
 #define PULSES_PER_LITER 165                              // 165 pulses from the flux sensor tell that a liter has passed
 //// Deep sleep params ////
 #define uS_TO_S_FACTOR 1000000ULL                         // Conversion factor for micro seconds to seconds 
-int time_to_sleep = 360;                                  // Time ESP32 will go to sleep (in seconds) 
+int time_to_sleep = 360;                                  // Default time ESP32 will go to sleep (in seconds) 
 RTC_DATA_ATTR int residual_time_to_sleep;           
 RTC_DATA_ATTR int bootCount = 0;
 
@@ -450,9 +450,6 @@ void setup() {
   digitalWrite(SR2_FORCE_GPIO, LOW);
   digitalWrite(SR3_FORCE_GPIO, LOW);
   DEBUG_SERIAL.begin(115200);
-  #if DEBUG == true
-    delay(500);                                                 //Take some time to open up the Serial Monitor
-  #endif
   //Increment boot number and print it every reboot
   ++bootCount;
   DEBUG_SERIAL.println("Boot number: " + String(bootCount));
