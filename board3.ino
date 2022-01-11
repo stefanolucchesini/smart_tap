@@ -93,7 +93,7 @@ float Qc = 6.51515;
 #define COND_INTERVAL 10                                // Interval of time in ms between two successive samples
 
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
-static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000001;SharedAccessKey=Cn4UylzZVDZD8UGzCTJazR3A9lRLnB+CbK6NkHxCIMk=";
+static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000003;SharedAccessKey=0sfe11VP4fWaaFEp/BZOUrmT+zEMhqAy8N+BrSnDxg8=";
 static bool hasIoTHub = false;
 static bool hasWifi = false;
 #define INTERVAL 10000               // IoT message sending interval in ms
@@ -231,7 +231,7 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
     pcntFreqConfig.counter_h_lim = PCNT_H_LIM_VAL;             // set upper limit of counting 
     pcntFreqConfig.unit = PCNT0_FREQ_UNIT;                      // select ESP32 pulse counter unit 0
     pcntFreqConfig.channel = PCNT_CHANNEL_0;                   // select channel 0 of pulse counter unit 0
-    pcnt_unit_config(&pcntFreqConfig);                         // configure rigisters of the pulse counter
+    pcnt_unit_config(&pcntFreqConfig);                         // configure registers of the pulse counter
     pcnt_counter_pause(PCNT0_FREQ_UNIT);                        // pause pulse counter unit
     pcnt_counter_clear(PCNT0_FREQ_UNIT);                        // zero and reset of pulse counter unit
     pcnt_event_enable(PCNT0_FREQ_UNIT, PCNT_EVT_H_LIM);         // enable event for interrupt on reaching upper limit of counting
@@ -249,7 +249,7 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
     pcntFreqConfig.counter_h_lim = PCNT_H_LIM_VAL;             // set upper limit of counting 
     pcntFreqConfig.unit = PCNT1_FREQ_UNIT;                      // select ESP32 pulse counter unit 1
     pcntFreqConfig.channel = PCNT_CHANNEL_0;                   // select channel 0 of pulse counter unit 0
-    pcnt_unit_config(&pcntFreqConfig);                         // configure rigisters of the pulse counter
+    pcnt_unit_config(&pcntFreqConfig);                         // configure registers of the pulse counter
     pcnt_counter_pause(PCNT1_FREQ_UNIT);                        // pause pulse counter unit
     pcnt_counter_clear(PCNT1_FREQ_UNIT);                        // zero and reset of pulse counter unit
     pcnt_event_enable(PCNT1_FREQ_UNIT, PCNT_EVT_H_LIM);         // enable event for interrupt on reaching upper limit of counting
@@ -344,27 +344,27 @@ void setup_just_to_update_flux() {
     delay(5000);
     current_FL2_liters = get_FL2_liters();
     current_FL3_liters = get_FL3_liters();
-    if(current_FL2_liters>old_FL2_liters || current_FL3_liters>old_FL3_liters) {
-      DEBUG_SERIAL.println("FL2: "+ String(current_FL2_liters));
-      DEBUG_SERIAL.println("FL3: "+ String(current_FL3_liters));
-    }
-    else {
-      DEBUG_SERIAL.println("Water not flushed anymore");
-      FL2_liters += current_FL2_liters;
-      FL3_liters += current_FL3_liters;
-      timeval timeNow, timeDiff;
-      gettimeofday(&timeNow, NULL);
-      timersub(&timeNow,&sleepTime,&timeDiff);
-      DEBUG_SERIAL.println(String("Deep sleep time in s: ") + String(timeDiff.tv_sec));
-      residual_time_to_sleep -= timeDiff.tv_sec;
-      if(residual_time_to_sleep < 0) residual_time_to_sleep = time_to_sleep;      // do not allow negative times
-      DEBUG_SERIAL.println(String("Residual sleep time in s: ") + String(residual_time_to_sleep));
-      esp_sleep_enable_timer_wakeup(residual_time_to_sleep * uS_TO_S_FACTOR);
-      esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);
-      DEBUG_SERIAL.println("Going back to sleep...");
-      gettimeofday(&sleepTime, NULL);                         
-      esp_deep_sleep_start();
-    } 
+      if(current_FL2_liters>old_FL2_liters || current_FL3_liters>old_FL3_liters) {
+        DEBUG_SERIAL.println("FL2: "+ String(current_FL2_liters));
+        DEBUG_SERIAL.println("FL3: "+ String(current_FL3_liters));
+      }
+      else {
+        DEBUG_SERIAL.println("Water not flushed anymore");
+        FL2_liters += current_FL2_liters;
+        FL3_liters += current_FL3_liters;
+        timeval timeNow, timeDiff;
+        gettimeofday(&timeNow, NULL);
+        timersub(&timeNow,&sleepTime,&timeDiff);
+        DEBUG_SERIAL.println(String("Deep sleep time in s: ") + String(timeDiff.tv_sec));
+        residual_time_to_sleep -= timeDiff.tv_sec;
+        if(residual_time_to_sleep < 0) residual_time_to_sleep = time_to_sleep;      // do not allow negative times
+        DEBUG_SERIAL.println(String("Residual sleep time in s: ") + String(residual_time_to_sleep));
+        esp_sleep_enable_timer_wakeup(residual_time_to_sleep * uS_TO_S_FACTOR);
+        esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);
+        DEBUG_SERIAL.println("Going back to sleep...");
+        gettimeofday(&sleepTime, NULL);                         
+        esp_deep_sleep_start();
+      } 
     old_FL2_liters = current_FL2_liters;
     old_FL3_liters = current_FL3_liters;
   }
