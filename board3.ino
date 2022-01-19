@@ -46,6 +46,7 @@ float ST2_temp, ST3_temp, ST4_temp;
 volatile int low_power = 0;                               // flag that enables or disables low power mode
 RTC_DATA_ATTR timeval sleepTime;
 volatile bool new_request = false;                        // flag that tells if a new request has arrived from the hub
+bool reply_over_serial = false;                           // used for debug, message is sent over serial and not to iot hub
 volatile int received_msg_id = 0;                         // used for ack mechanism
 volatile int received_msg_type = -1;                      // if 0 the device is sending its status
                                                           // if 1 the HUB wants to change the status of the device (with the values passed in the message)
@@ -94,6 +95,8 @@ float Qc = 6.51515;
 
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000003;SharedAccessKey=0sfe11VP4fWaaFEp/BZOUrmT+zEMhqAy8N+BrSnDxg8=";
+//static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000004;SharedAccessKey=jqys/iqV3clWDnflPWqevTE9oAM7jIcdt0ckTH5GQI0=";
+//static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000005;SharedAccessKey=r/7XxmzMdi001a7BGLpM5Vc5VLJKdtwQZDka5phHNu0=";
 static bool hasIoTHub = false;
 static bool hasWifi = false;
 #define INTERVAL 10000               // IoT message sending interval in ms
@@ -277,13 +280,8 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
     return ( OverflowCounter1*PCNT_H_LIM_VAL + PulseCounter1 ) / PULSES_PER_LITER;
 }
 
-void setup_with_wifi() {
-  // configure status LED PWM functionalitites
-  ledcSetup(LED_CHANNEL, LED_PWM_FREQ, RESOLUTION);
-  ledcAttachPin(LED, LED_CHANNEL);                              // Attach PWM module to status LED
-  ledcWrite(LED_CHANNEL, BLINK_5HZ);                            // LED initially blinks at 5Hz
-  DEBUG_SERIAL.println("Reading sensor values...");
-  // Sample sensors before enabling wifi (ADC on pin 25 does not work with wifi on)
+void sample_sensors()
+{
   ST2_temp = read_temperature(ST2_FORCE_GPIO, ST2_MEASURE_GPIO);
   ST3_temp = read_temperature(ST3_FORCE_GPIO, ST3_MEASURE_GPIO);
   ST4_temp = read_temperature(ST4_FORCE_GPIO, ST4_MEASURE_GPIO);
@@ -291,6 +289,16 @@ void setup_with_wifi() {
   SR2_value = read_conductivity(SR2_FORCE_GPIO, SR2_MEASURE_GPIO);
   SR3_value = read_conductivity(SR3_FORCE_GPIO, SR3_MEASURE_GPIO);
   pH_value = read_pH(SPH1_GPIO);
+}
+
+void setup_with_wifi() {
+  // configure status LED PWM functionalitites
+  ledcSetup(LED_CHANNEL, LED_PWM_FREQ, RESOLUTION);
+  ledcAttachPin(LED, LED_CHANNEL);                              // Attach PWM module to status LED
+  ledcWrite(LED_CHANNEL, BLINK_5HZ);                            // LED initially blinks at 5Hz
+  DEBUG_SERIAL.println("Reading sensor values...");
+  // Sample sensors before enabling wifi (ADC on pin 25 does not work with wifi on)
+  sample_sensors();
   DEBUG_SERIAL.println("Starting WiFi connection...");
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
   WiFiManager wm;
@@ -397,7 +405,7 @@ float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
         mean += conductivity;
         delay(COND_INTERVAL); 
       }
-    digitalWrite(GPIO_FORCE, LOW);
+  digitalWrite(GPIO_FORCE, LOW);
   DEBUG_SERIAL.println(String("Conductivity in milliSiemens: ") + String(mean/COND_SAMPLES, 2) + String(" On GPIO: ") + String(GPIO_MEASURE));
   return roundf(mean/(COND_SAMPLES/10)) / 10;   //return the conductivity with a single decimal place
 }
@@ -474,40 +482,58 @@ void setup() {
 }
 
 void send_message(int reply_type, int msgid) {
-if (hasWifi && hasIoTHub)
-  {
-      StaticJsonDocument<512> msgtosend;            // pre-allocate 512 bytes of memory for the json message
-      msgtosend["message_id"] = msgid;
-      msgtosend["timestamp"] = UTC.dateTime(ISO8601);
-      msgtosend["message_type"] = reply_type;
-      msgtosend["device_id"] = DEVICE_ID;
-      msgtosend["iot_module_software_version"] = SW_VERSION;
-      msgtosend["SR1"] = SR1_value;
-      msgtosend["SR2"] = SR2_value;
-      msgtosend["SR3"] = SR3_value;
-      msgtosend["ST2"] = ST2_temp;
-      msgtosend["ST3"] = ST3_temp;
-      msgtosend["ST4"] = ST4_temp;
-      msgtosend["SPH1"] = pH_value;
-      msgtosend["FL2"] = FL2_liters;
-      msgtosend["FL3"] = FL3_liters;      
-      msgtosend["EV2"] = EV2_status;
-      msgtosend["EV3"] = EV3_status;                   
-      msgtosend["EV4"] = EV4_status;   
-      msgtosend["EV5"] = EV5_status;   
-      msgtosend["RA1"] = RA1_status; 
-      msgtosend["low_power"] = low_power;
-      msgtosend["sleep_time"] = time_to_sleep;   
 
-      char out[512];
-      int msgsize =serializeJson(msgtosend, out);
-      //DEBUG_SERIAL.println(msgsize);
-      EVENT_INSTANCE* message = Esp32MQTTClient_Event_Generate(out, MESSAGE);
-      Esp32MQTTClient_SendEventInstance(message);
-      DEBUG_SERIAL.println("Message sent to to HUB:");
-      DEBUG_SERIAL.println(out);
-      ledcWrite(LED_CHANNEL, OFF);
+  StaticJsonDocument<512> msgtosend;            // pre-allocate 512 bytes of memory for the json message
+  msgtosend["message_id"] = msgid;
+  msgtosend["timestamp"] = UTC.dateTime(ISO8601);
+  msgtosend["message_type"] = reply_type;
+  msgtosend["device_id"] = DEVICE_ID;
+  msgtosend["iot_module_software_version"] = SW_VERSION;
+  msgtosend["SR1"] = SR1_value;
+  msgtosend["SR2"] = SR2_value;
+  msgtosend["SR3"] = SR3_value;
+  msgtosend["ST2"] = ST2_temp;
+  msgtosend["ST3"] = ST3_temp;
+  msgtosend["ST4"] = ST4_temp;
+  msgtosend["SPH1"] = pH_value;
+  msgtosend["FL2"] = FL2_liters;
+  msgtosend["FL3"] = FL3_liters;      
+  msgtosend["EV2"] = EV2_status;
+  msgtosend["EV3"] = EV3_status;                   
+  msgtosend["EV4"] = EV4_status;   
+  msgtosend["EV5"] = EV5_status;   
+  msgtosend["RA1"] = RA1_status; 
+  msgtosend["low_power"] = low_power;
+  msgtosend["sleep_time"] = time_to_sleep;   
+
+  char out[512];
+  int msgsize =serializeJson(msgtosend, out);
+  //DEBUG_SERIAL.println(msgsize);
+  if (hasWifi && hasIoTHub && reply_over_serial == false)
+    {
+    EVENT_INSTANCE* message = Esp32MQTTClient_Event_Generate(out, MESSAGE);
+    Esp32MQTTClient_SendEventInstance(message);
+    DEBUG_SERIAL.println("Message sent to to HUB:");
+    DEBUG_SERIAL.println(out);
+    ledcWrite(LED_CHANNEL, OFF);
+    }
+  else if (reply_over_serial == true) 
+  {
+    reply_over_serial = false;
+    DEBUG_SERIAL.println("Replying over serial:");
+    DEBUG_SERIAL.println(out);
+  } 
+  else
+  {
+    DEBUG_SERIAL.println("Reply FAILED");
+    DEBUG_SERIAL.print("hasWifi: ");
+    DEBUG_SERIAL.println(hasWifi);
+    DEBUG_SERIAL.print("hasIoTHub: ");
+    DEBUG_SERIAL.println(hasIoTHub);
+    DEBUG_SERIAL.print("reply_over_serial: ");
+    DEBUG_SERIAL.println(reply_over_serial);
   }
+    
 }
 
 
@@ -543,4 +569,37 @@ void loop() {
       esp_deep_sleep_start();
       }
   }
+  #if DEBUG == true
+  // send data only when you receive data:
+  if (Serial.available() > 0) {
+    String s = Serial.readStringUntil('#');   // Until CR (Carriage Return)
+    // NOTE: Use arduino serial monitor and choose "No line ending" option
+    s.replace("#", "");
+    DEBUG_SERIAL.println("Received JSON from serial:");
+    DEBUG_SERIAL.println(s);
+    StaticJsonDocument<400> doc;
+    DeserializationError error = deserializeJson(doc, s);
+    if (error) {
+    DEBUG_SERIAL.print(F("deserializeJson() failed: "));
+    DEBUG_SERIAL.println(error.c_str());
+    }
+    else {
+      new_request = true;
+      reply_over_serial = true;
+      sample_sensors();
+      DEBUG_SERIAL.println("Warning!: SR3 does not work with wifi on");
+      received_msg_id = doc["message_id"];
+      received_msg_type = doc["message_type"];
+        if(received_msg_type == SET_VALUES) {
+            EV2_status = doc["EV2"];
+            EV3_status = doc["EV3"];
+            EV4_status = doc["EV4"];
+            EV5_status = doc["EV5"];
+            RA1_status = doc["RA1"];
+            low_power = doc["low_power"];
+            time_to_sleep = doc["sleep_time"];
+        }
+    }
+  }
+  #endif
 }
