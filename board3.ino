@@ -40,7 +40,7 @@ float SR1_value, SR2_value, SR3_value;
 //// Temperature sensors readouts ////
 float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
-#define SW_VERSION "0.1"
+#define SW_VERSION "0.2"
 #define DEVICE_TYPE "SC3"     
 #define DEVICE_ID 1
 //// Other handy variables ////
@@ -153,8 +153,8 @@ static void MessageCallback(const char* payLoad, int size)
 {
   ledcWrite(LED_CHANNEL, ON);
   DEBUG_SERIAL.println("Received message from HUB");
-  if (size < 256) { 
-    StaticJsonDocument<256> doc;
+  if (size < 512) { 
+    StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, payLoad);
     if (error) {
       DEBUG_SERIAL.print(F("deserializeJson() failed: "));
