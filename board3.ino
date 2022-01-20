@@ -41,7 +41,8 @@ float SR1_value, SR2_value, SR3_value;
 float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
 #define SW_VERSION "0.1"
-#define DEVICE_ID "geniale board 3"     
+#define DEVICE_TYPE "SC3"     
+#define DEVICE_ID 1
 //// Other handy variables ////
 volatile int low_power = 0;                               // flag that enables or disables low power mode
 RTC_DATA_ATTR timeval sleepTime;
@@ -94,9 +95,21 @@ float Qc = 6.51515;
 #define COND_INTERVAL 10                                // Interval of time in ms between two successive samples
 
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
+#if DEVICE_ID == 1
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000003;SharedAccessKey=0sfe11VP4fWaaFEp/BZOUrmT+zEMhqAy8N+BrSnDxg8=";
-//static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000004;SharedAccessKey=jqys/iqV3clWDnflPWqevTE9oAM7jIcdt0ckTH5GQI0=";
-//static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000005;SharedAccessKey=r/7XxmzMdi001a7BGLpM5Vc5VLJKdtwQZDka5phHNu0=";
+#endif
+#if DEVICE_ID == 2
+static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000004;SharedAccessKey=jqys/iqV3clWDnflPWqevTE9oAM7jIcdt0ckTH5GQI0=";
+#endif
+#if DEVICE_ID == 3
+static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000005;SharedAccessKey=r/7XxmzMdi001a7BGLpM5Vc5VLJKdtwQZDka5phHNu0=";
+#endif
+#if DEVICE_ID == 4
+static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000006;SharedAccessKey=TU8XgPr0l79sAWiyITF9/hY4f5+nkEpE9UoJPGgu0K8=";
+#endif
+#if DEVICE_ID == 5
+static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000007;SharedAccessKey=G2QY5SqHYcOKivhcncWGpEF53Ra4wYydm+PhBgTD9xA=";
+#endif
 static bool hasIoTHub = false;
 static bool hasWifi = false;
 #define INTERVAL 10000               // IoT message sending interval in ms
@@ -487,6 +500,7 @@ void send_message(int reply_type, int msgid) {
   msgtosend["message_id"] = msgid;
   msgtosend["timestamp"] = UTC.dateTime(ISO8601);
   msgtosend["message_type"] = reply_type;
+  msgtosend["device_type"] = DEVICE_TYPE;
   msgtosend["device_id"] = DEVICE_ID;
   msgtosend["iot_module_software_version"] = SW_VERSION;
   msgtosend["SR1"] = SR1_value;
