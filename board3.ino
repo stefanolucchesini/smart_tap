@@ -73,21 +73,22 @@ float pH_value;                                       // pH value read from the 
 //pH = Mp * ADC + Qp
 float Mp = 0.0143;           
 float Qp = -12.7857;
-#define pH_SAMPLES 100                                  // Number of samples taken to give a pH value
+#define pH_SAMPLES 100                                // Number of samples taken to give a pH value
 #define pH_INTERVAL 10                                // Interval of time in ms between two successive samples
 
 // Variables for voltages corresponding to temperature ranges, for PT100:
-//1190 mV correspond to 0 deg C and an ADC read of 1308
-//1610 mV correspond to 100 deg C and an ADC read of 1823
-//Temperature = M * ADC + Q
-float M = 0.194174;        
-float Q = -259.980583;
-#define TEMP_SAMPLES 100                                // Number of samples taken to give a temperature value
-#define TEMP_INTERVAL 10                              // Interval of time in ms between two successive samples
+#define VREF 2500.0                                   // Reference voltage in mV
+#define GAIN_TEMP 10.0                                // Gain of the frontend stage
+#define R_UP_TEMP 2000.0                              // Upper resistance of the voltage partitioner used to measure the PT100   
+#define R0 100.0                                      // resistance of the sensor at 0 deg c          
+#define ALPHA 0.004                                   // alpha coefficient
+#define TEMP_SAMPLES 500                              // Number of samples taken to give a temperature value
+#define TEMP_INTERVAL 5                               // Interval of time in ms between two successive samples
 
 // Variables for voltages corresponding to conductiviy ranges, for ECDICPT/1:
-#define COND_SAMPLES 500                                // Number of samples taken to give a conductivity value
-#define COND_INTERVAL 5                                 // Interval of time in ms between two successive samples
+#define R_UP_COND   220000.0                          // Upper resistance of the voltage partitioner used to measure conductivity
+#define COND_SAMPLES 500                              // Number of samples taken to give a conductivity value
+#define COND_INTERVAL 5                               // Interval of time in ms between two successive samples
 
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
 #if DEVICE_ID == 1
@@ -376,7 +377,8 @@ void setup_just_to_update_flux() {
         if(residual_time_to_sleep < 0) residual_time_to_sleep = time_to_sleep;      // do not allow negative times
         DEBUG_SERIAL.println(String("Residual sleep time in s: ") + String(residual_time_to_sleep));
         esp_sleep_enable_timer_wakeup(residual_time_to_sleep * uS_TO_S_FACTOR);
-        esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);
+        esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, LOW);  // FL3 can wake up the board
+        esp_sleep_enable_ext1_wakeup(GPIO_SEL_26, ESP_EXT1_WAKEUP_ALL_LOW);  // OR FL2 can wake up the board
         DEBUG_SERIAL.println("Going back to sleep...");
         gettimeofday(&sleepTime, NULL);                         
         esp_deep_sleep_start();
@@ -388,18 +390,26 @@ void setup_just_to_update_flux() {
 
 float read_temperature(int GPIO_FORCE, int GPIO_MEASURE) {
   digitalWrite(GPIO_FORCE, HIGH);
+  delay(500);
   float mean = 0;
-  float val, temperaturec;
+  float temperaturec, vin, Rx;
     // acquire TEMP_SAMPLES samples and compute mean
     for(int i = 0; i < TEMP_SAMPLES; i++)  {
-        val = analogRead(GPIO_MEASURE);
-        temperaturec = M * val + Q;
-        mean += temperaturec;
+        mean += analogRead(GPIO_MEASURE);
         delay(TEMP_INTERVAL); 
       }
   digitalWrite(GPIO_FORCE, LOW);
-  DEBUG_SERIAL.println(String("Temperature in deg C: ") + String(mean/TEMP_SAMPLES, 2) + String(" On GPIO: ") + String(GPIO_MEASURE));
-  return roundf(mean/(TEMP_SAMPLES/10)) / 10;   //return the temperature with a single decimal place
+  mean /= TEMP_SAMPLES;
+  DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
+  vin = (3300.0*mean) / 4095.0 + 120;  // When there are 3.3V at input, ADC read is 4095
+  DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  // The voltage at the voltage partitioner is lower, there's the gain of the input stage
+  vin /= GAIN_TEMP;
+  Rx = - (R_UP_TEMP * vin) / (vin-VREF);
+  DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  temperaturec = (Rx/R0 - 1.0) / ALPHA;
+  DEBUG_SERIAL.println(String("Temperature celsius: ") + String(temperaturec, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  return roundf(temperaturec*10) / 10;   //return the temperature with a single decimal place
 }
 
 float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
@@ -415,12 +425,12 @@ float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
   digitalWrite(GPIO_FORCE, LOW);
   mean /= COND_SAMPLES;
   //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
-  vin = (2500.0*mean) / 2960.0;  // When there are 2,5V at input, ADC read is 2960
+  vin = (VREF*mean) / 2960.0;  // When there are 2,5V at input, ADC read is 2960
   DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
-  Rx = - (220000.0*vin) / (vin-2500.0);
+  Rx = - (R_UP_COND * vin) / (vin-VREF);
   DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
   conductivity = roundf(10000000.0/Rx)/10;
-  DEBUG_SERIAL.println(String("Conductivity in uSiemens: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  DEBUG_SERIAL.println(String("Conductivity in uSiemens: ") + String(conductivity, 1) + String(" On GPIO") + String(GPIO_MEASURE));
   return conductivity;   //return the conductivity in uSv with a single decimal place
 }
 
@@ -577,7 +587,8 @@ void loop() {
       if( low_power == true) {
       DEBUG_SERIAL.println("Going into deep sleep");
       DEBUG_SERIAL.flush(); 
-      esp_sleep_enable_ext1_wakeup((1 << (int)FL2_GPIO) | (1 << (int)FL3_GPIO), ESP_EXT1_WAKEUP_ANY_HIGH);
+      esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, LOW);  // FL3 can wake up the board
+      esp_sleep_enable_ext1_wakeup(GPIO_SEL_26, ESP_EXT1_WAKEUP_ALL_LOW); // OR FL2 can wake up the board
       esp_sleep_enable_timer_wakeup(time_to_sleep * uS_TO_S_FACTOR);
       residual_time_to_sleep = time_to_sleep; 
       gettimeofday(&sleepTime, NULL);         
