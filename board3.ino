@@ -86,13 +86,8 @@ float Q = -259.980583;
 #define TEMP_INTERVAL 10                              // Interval of time in ms between two successive samples
 
 // Variables for voltages corresponding to conductiviy ranges, for ECDICPT/1:
-//227 mV correspond to 5 mS and an ADC read of 140
-//417 mV correspond to 2.5 mS and an ADC read of 371
-//Conductivity = Mc * ADC + Qc
-float Mc = -0.01082;          
-float Qc = 6.51515;
-#define COND_SAMPLES 100                                  // Number of samples taken to give a conductivity value
-#define COND_INTERVAL 10                                // Interval of time in ms between two successive samples
+#define COND_SAMPLES 500                                // Number of samples taken to give a conductivity value
+#define COND_INTERVAL 5                                 // Interval of time in ms between two successive samples
 
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
 #if DEVICE_ID == 1
@@ -409,18 +404,24 @@ float read_temperature(int GPIO_FORCE, int GPIO_MEASURE) {
 
 float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
   digitalWrite(GPIO_FORCE, HIGH);
-  float mean = 0;
-  float val, conductivity;
+  delay(500);
+  float mean = 0.0;
+  float conductivity, vin, Rx;
     // acquire COND_SAMPLES samples and compute mean
     for(int i = 0; i < COND_SAMPLES; i++)  {
-        val = analogRead(GPIO_MEASURE);
-        conductivity = Mc * val + Qc;
-        mean += conductivity;
+        mean += analogRead(GPIO_MEASURE);
         delay(COND_INTERVAL); 
       }
   digitalWrite(GPIO_FORCE, LOW);
-  DEBUG_SERIAL.println(String("Conductivity in milliSiemens: ") + String(mean/COND_SAMPLES, 2) + String(" On GPIO: ") + String(GPIO_MEASURE));
-  return roundf(mean/(COND_SAMPLES/10)) / 10;   //return the conductivity with a single decimal place
+  mean /= COND_SAMPLES;
+  //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
+  vin = (2500.0*mean) / 2960.0;  // When there are 2,5V at input, ADC read is 2960
+  DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  Rx = - (220000.0*vin) / (vin-2500.0);
+  DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  conductivity = roundf(10000000.0/Rx)/10;
+  DEBUG_SERIAL.println(String("Conductivity in uSiemens: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  return conductivity;   //return the conductivity in uSv with a single decimal place
 }
 
 float read_pH(int GPIO_MEASURE) {
