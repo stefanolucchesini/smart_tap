@@ -84,7 +84,8 @@ float pH_value;                                       // pH value read from the 
 #define R_UP_COND   220000.0                          // Upper resistance of the voltage partitioner used to measure conductivity
 #define COND_SAMPLES 500                              // Number of samples taken to give a conductivity value
 #define COND_INTERVAL 5                               // Interval of time in ms between two successive samples
-
+#define REFERENCE_COMP_TEMP 25.0                      // All conductivity values are referred to this reference temperature in celsius
+#define COND_DRIFT_PERC  0.02                         // Percentage of conductivity drift per every degree celsius
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
 #if DEVICE_ID == 1
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000003;SharedAccessKey=0sfe11VP4fWaaFEp/BZOUrmT+zEMhqAy8N+BrSnDxg8=";
@@ -397,13 +398,25 @@ float read_temperature(int GPIO_FORCE, int GPIO_MEASURE) {
   mean /= TEMP_SAMPLES;
   //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
   vin = (3300.0*mean) / 4095.0 + 120;  // When there are 3.3V at input, ADC read is 4095
-  DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  //DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
   // The voltage at the voltage partitioner is lower, there's the gain of the input stage
   vin /= GAIN_TEMP;
   Rx = - (R_UP_TEMP * vin) / (vin-VREF);
-  DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  //DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
   temperaturec = (Rx/R0 - 1.0) / ALPHA;
-  DEBUG_SERIAL.println(String("Temperature celsius: ") + String(temperaturec, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  DEBUG_SERIAL.print(String("Temperature celsius: ") + String(temperaturec, 2) + String(" On "));
+  switch(GPIO_MEASURE)
+  {
+    case ST2_MEASURE_GPIO:
+    DEBUG_SERIAL.println("ST2");
+    break;
+    case ST3_MEASURE_GPIO:
+    DEBUG_SERIAL.println("ST3");
+    break;
+    case ST4_MEASURE_GPIO:
+    DEBUG_SERIAL.println("ST4");
+    break;
+  }
   return roundf(temperaturec*10) / 10;   //return the temperature with a single decimal place
 }
 
@@ -423,10 +436,27 @@ float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
   vin = (VREF*mean) / 2960.0;  // When there are 2,5V at input, ADC read is 2960
   //DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
   Rx = - (R_UP_COND * vin) / (vin-VREF);
-  DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
-  conductivity = roundf(10000000.0/Rx)/10;
-  DEBUG_SERIAL.println(String("Conductivity in uSiemens: ") + String(conductivity, 1) + String(" On GPIO") + String(GPIO_MEASURE));
-  return conductivity;   //return the conductivity in uSv with a single decimal place
+  //DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  conductivity = 1000000.0/Rx;
+  DEBUG_SERIAL.print(String("Conductivity in uSiemens: ") + String(conductivity, 1) + String(" On "));
+  // Temperature compensation
+  switch(GPIO_MEASURE)
+  {
+    case SR1_MEASURE_GPIO:
+    conductivity = conductivity * (1.0 - (ST2_temp - REFERENCE_COMP_TEMP)*COND_DRIFT_PERC);
+    DEBUG_SERIAL.println("SR1");
+    break;
+    case SR2_MEASURE_GPIO:
+    conductivity = conductivity * (1.0 - (ST3_temp - REFERENCE_COMP_TEMP)*COND_DRIFT_PERC);
+    DEBUG_SERIAL.println("SR2");
+    break;
+    case SR3_MEASURE_GPIO:
+    conductivity = conductivity * (1.0 - (ST4_temp - REFERENCE_COMP_TEMP)*COND_DRIFT_PERC);
+    DEBUG_SERIAL.println("SR3");
+    break;
+  }
+  DEBUG_SERIAL.println(String("Compensated conductivity: ") + String(conductivity, 1));
+  return roundf(10*conductivity)/10;   //return conductivity in uSiemens with single decimal place
 }
 
 float read_pH(int GPIO_MEASURE) {
