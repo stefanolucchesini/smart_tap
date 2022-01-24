@@ -309,7 +309,28 @@ void setup_with_wifi() {
   WiFiManager wm;
   //wm.resetSettings();  // reset settings - wipe stored credentials for testing
   bool res;
-  res = wm.autoConnect("GENIALE brd3 setup"); // Generates a pwd-free ap for the user to connect and tell Wi-Fi credentials
+  switch(DEVICE_ID)
+  {
+    case 1:
+    res = wm.autoConnect("GENIALE brd3.1 setup"); // Generates a pwd-free ap for the user to connect and tell Wi-Fi credentials
+    break;
+    case 2:
+    res = wm.autoConnect("GENIALE brd3.2 setup"); 
+    break;
+    case 3:
+    res = wm.autoConnect("GENIALE brd3.3 setup"); 
+    break;
+    case 4:
+    res = wm.autoConnect("GENIALE brd3.4 setup"); 
+    break;
+    case 5:
+    res = wm.autoConnect("GENIALE brd3.5 setup"); 
+    break;
+    default:
+    res = wm.autoConnect("GENIALE brd3 setup"); 
+    break;
+  }
+  
   //res = wm.autoConnect("AutoConnectAP","password"); // Generates a pwd-protected ap for the user to connect and tell Wi-Fi credentials
   if(!res) {
       DEBUG_SERIAL.println("Failed to connect to wifi");
@@ -376,6 +397,7 @@ void setup_just_to_update_flux() {
         esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, LOW);  // FL3 can wake up the board
         esp_sleep_enable_ext1_wakeup(GPIO_SEL_26, ESP_EXT1_WAKEUP_ALL_LOW);  // OR FL2 can wake up the board
         DEBUG_SERIAL.println("Going back to sleep...");
+        DEBUG_SERIAL.flush(); 
         gettimeofday(&sleepTime, NULL);                         
         esp_deep_sleep_start();
       } 
@@ -619,8 +641,8 @@ void loop() {
       if( low_power == true) {
       DEBUG_SERIAL.println("Going into deep sleep");
       DEBUG_SERIAL.flush(); 
-      esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, LOW);  // FL3 can wake up the board
-      esp_sleep_enable_ext1_wakeup(GPIO_SEL_26, ESP_EXT1_WAKEUP_ALL_LOW); // OR FL2 can wake up the board
+      esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, LOW);  // FL2 can wake up the board
+      esp_sleep_enable_ext1_wakeup(GPIO_SEL_26, ESP_EXT1_WAKEUP_ALL_LOW); // OR FL3 can wake up the board
       esp_sleep_enable_timer_wakeup(time_to_sleep * uS_TO_S_FACTOR);
       residual_time_to_sleep = time_to_sleep; 
       gettimeofday(&sleepTime, NULL);         
