@@ -67,15 +67,10 @@ volatile int received_msg_type = -1;                      // if 0 the device is 
 
 //// PH sensor reading variable ////
 float pH_value;                                       // pH value read from the pH sensor (typical range: 4.5 <-> 9.5)
-// Variables for voltages corresponding to pH values:
-//1107.5 mV correspond to a pH of 4.5 and an ADC read of 1210
-//1392.5 mV correspond to a pH of 9.5 and an ADC read of 1560
-//pH = Mp * ADC + Qp
-float Mp = 0.0143;           
-float Qp = -12.7857;
 #define pH_SAMPLES 100                                // Number of samples taken to give a pH value
 #define pH_INTERVAL 10                                // Interval of time in ms between two successive samples
-
+#define pH_REF  1250                                  // Reference voltage in mV defined by hardware
+#define mV_per_pH  57                                 // mV per every point of pH
 // Variables for voltages corresponding to temperature ranges, for PT100:
 #define VREF 2500.0                                   // Reference voltage in mV
 #define GAIN_TEMP 10.0                                // Gain of the frontend stage
@@ -400,7 +395,7 @@ float read_temperature(int GPIO_FORCE, int GPIO_MEASURE) {
       }
   digitalWrite(GPIO_FORCE, LOW);
   mean /= TEMP_SAMPLES;
-  DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
+  //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
   vin = (3300.0*mean) / 4095.0 + 120;  // When there are 3.3V at input, ADC read is 4095
   DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
   // The voltage at the voltage partitioner is lower, there's the gain of the input stage
@@ -426,7 +421,7 @@ float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
   mean /= COND_SAMPLES;
   //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
   vin = (VREF*mean) / 2960.0;  // When there are 2,5V at input, ADC read is 2960
-  DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  //DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
   Rx = - (R_UP_COND * vin) / (vin-VREF);
   DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
   conductivity = roundf(10000000.0/Rx)/10;
@@ -436,16 +431,19 @@ float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
 
 float read_pH(int GPIO_MEASURE) {
   float mean = 0;
-  float val, pH;
+  float vin, pH;
     // acquire pH_SAMPLES samples and compute mean
     for(int i = 0; i < pH_SAMPLES; i++)  {
-        val = analogRead(GPIO_MEASURE);
-        pH = Mp * val + Qp;
-        mean += pH;
+        mean += analogRead(GPIO_MEASURE);
         delay(pH_INTERVAL); 
       }
-  DEBUG_SERIAL.println(String("pH value: ") + String(mean/pH_SAMPLES, 2) + String(" On GPIO: ") + String(GPIO_MEASURE));
-  return roundf(mean/(pH_SAMPLES/10)) / 10;   //return the pH with a single decimal place
+  mean /= pH_SAMPLES;
+  //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
+  vin = (3300.0*mean) / 4095.0 + 120;  
+  //DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  pH = (vin - pH_REF) / mV_per_pH;
+  DEBUG_SERIAL.println(String("pH value: ") + String(pH, 2));
+  return roundf(pH*10) / 10;   //return the pH with a single decimal place
 }
 
 void setup() {
