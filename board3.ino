@@ -42,7 +42,7 @@ float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
 #define SW_VERSION "0.3"
 #define DEVICE_TYPE "SC3"     
-#define DEVICE_ID 1
+#define DEVICE_ID 00000007                                // ranges from 3 to 7
 //// Other handy variables ////
 volatile int low_power = 0;                               // flag that enables or disables low power mode
 RTC_DATA_ATTR timeval sleepTime;
@@ -87,19 +87,19 @@ float pH_value;                                       // pH value read from the 
 #define REFERENCE_COMP_TEMP 25.0                      // All conductivity values are referred to this reference temperature in celsius
 #define COND_DRIFT_PERC  0.02                         // Percentage of conductivity drift per every degree celsius
 ////  MICROSOFT AZURE IOT DEFINITIONS   ////
-#if DEVICE_ID == 1
+#if DEVICE_ID == 00000003
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000003;SharedAccessKey=0sfe11VP4fWaaFEp/BZOUrmT+zEMhqAy8N+BrSnDxg8=";
 #endif
-#if DEVICE_ID == 2
+#if DEVICE_ID == 00000004
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000004;SharedAccessKey=jqys/iqV3clWDnflPWqevTE9oAM7jIcdt0ckTH5GQI0=";
 #endif
-#if DEVICE_ID == 3
+#if DEVICE_ID == 00000005
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000005;SharedAccessKey=r/7XxmzMdi001a7BGLpM5Vc5VLJKdtwQZDka5phHNu0=";
 #endif
-#if DEVICE_ID == 4
+#if DEVICE_ID == 00000006
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000006;SharedAccessKey=TU8XgPr0l79sAWiyITF9/hY4f5+nkEpE9UoJPGgu0K8=";
 #endif
-#if DEVICE_ID == 5
+#if DEVICE_ID == 00000007
 static const char* connectionString = "HostName=geniale-iothub.azure-devices.net;DeviceId=00000007;SharedAccessKey=G2QY5SqHYcOKivhcncWGpEF53Ra4wYydm+PhBgTD9xA=";
 #endif
 static bool hasIoTHub = false;
@@ -311,20 +311,20 @@ void setup_with_wifi() {
   bool res;
   switch(DEVICE_ID)
   {
-    case 1:
-    res = wm.autoConnect("GENIALE brd3.1 setup"); // Generates a pwd-free ap for the user to connect and tell Wi-Fi credentials
+    case 00000003:
+    res = wm.autoConnect("GENIALE brd3 dev3 setup"); // Generates a pwd-free ap for the user to connect and tell Wi-Fi credentials
     break;
-    case 2:
-    res = wm.autoConnect("GENIALE brd3.2 setup"); 
+    case 00000004:
+    res = wm.autoConnect("GENIALE brd3 dev4 setup"); 
     break;
-    case 3:
-    res = wm.autoConnect("GENIALE brd3.3 setup"); 
+    case 00000005:
+    res = wm.autoConnect("GENIALE brd3 dev5 setup"); 
     break;
-    case 4:
-    res = wm.autoConnect("GENIALE brd3.4 setup"); 
+    case 00000006:
+    res = wm.autoConnect("GENIALE brd3 dev6 setup"); 
     break;
-    case 5:
-    res = wm.autoConnect("GENIALE brd3.5 setup"); 
+    case 00000007:
+    res = wm.autoConnect("GENIALE brd3 dev7 setup"); 
     break;
     default:
     res = wm.autoConnect("GENIALE brd3 setup"); 
@@ -406,7 +406,50 @@ void setup_just_to_update_flux() {
   }
 }
 
+float adc_to_millivolts(float value) {
+ // https://w4krl.com/esp32-analog-to-digital-conversion-accuracy/
+  if(value>3000)
+    switch(DEVICE_ID){
+      case 00000003:
+      return  (0.5*value + 1109.4);  
+      case 00000004:
+      return  (0.5*value + 1135.4); 
+      case 00000005:
+      return  (0.5*value + 1081.4); 
+      case 00000006:
+      return  (0.5*value + 1058.4); 
+      case 00000007:
+      return  (0.5*value + 1091.4); 
+    }
+  else
+    switch(DEVICE_ID){
+    case 00000003:
+    return (0.8*value + 159.2);  
+    case 00000004:
+    return (0.8*value + 185.2);  
+    case 00000005:
+    return (0.8*value + 131.2);  
+    case 00000006:
+    return (0.8*value + 108.2);  
+    case 00000007:
+    return (0.8*value + 141.2);  
+    }
+}
+
 float read_temperature(int GPIO_FORCE, int GPIO_MEASURE) {
+  DEBUG_SERIAL.print("Performing measurements on ");
+  switch(GPIO_MEASURE)
+  {
+    case ST2_MEASURE_GPIO:
+    DEBUG_SERIAL.println(String("ST2") + String(" on GPIO") + String(GPIO_MEASURE));
+    break;
+    case ST3_MEASURE_GPIO:
+    DEBUG_SERIAL.println(String("ST3") + String(" on GPIO") + String(GPIO_MEASURE));
+    break;
+    case ST4_MEASURE_GPIO:
+    DEBUG_SERIAL.println(String("ST4") + String(" on GPIO") + String(GPIO_MEASURE));
+    break;
+  }
   digitalWrite(GPIO_FORCE, HIGH);
   delay(500);
   float mean = 0;
@@ -419,30 +462,31 @@ float read_temperature(int GPIO_FORCE, int GPIO_MEASURE) {
   digitalWrite(GPIO_FORCE, LOW);
   mean /= TEMP_SAMPLES;
   //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
-  vin = (3300.0*mean) / 4095.0 + 120;  // When there are 3.3V at input, ADC read is 4095
-  //DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  vin = adc_to_millivolts(mean);
+  DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2));
   // The voltage at the voltage partitioner is lower, there's the gain of the input stage
   vin /= GAIN_TEMP;
   Rx = - (R_UP_TEMP * vin) / (vin-VREF);
   //DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
   temperaturec = (Rx/R0 - 1.0) / ALPHA;
-  DEBUG_SERIAL.print(String("Temperature celsius: ") + String(temperaturec, 2) + String(" On "));
-  switch(GPIO_MEASURE)
-  {
-    case ST2_MEASURE_GPIO:
-    DEBUG_SERIAL.println("ST2");
-    break;
-    case ST3_MEASURE_GPIO:
-    DEBUG_SERIAL.println("ST3");
-    break;
-    case ST4_MEASURE_GPIO:
-    DEBUG_SERIAL.println("ST4");
-    break;
-  }
+  DEBUG_SERIAL.println(String("Temperature celsius: ") + String(temperaturec, 2));
   return roundf(temperaturec*10) / 10;   //return the temperature with a single decimal place
 }
 
 float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
+  DEBUG_SERIAL.print("Performing measurements on ");
+  switch(GPIO_MEASURE)
+  {
+    case SR1_MEASURE_GPIO:
+    DEBUG_SERIAL.println(String("SR1") + String(" on GPIO") + String(GPIO_MEASURE));
+    break;
+    case SR2_MEASURE_GPIO:
+    DEBUG_SERIAL.println(String("SR2") + String(" on GPIO") + String(GPIO_MEASURE));
+    break;
+    case SR3_MEASURE_GPIO:
+    DEBUG_SERIAL.println(String("SR3") + String(" on GPIO") + String(GPIO_MEASURE));
+    break;
+  }
   digitalWrite(GPIO_FORCE, HIGH);
   delay(500);
   float mean = 0.0;
@@ -454,31 +498,28 @@ float read_conductivity(int GPIO_FORCE, int GPIO_MEASURE) {
       }
   digitalWrite(GPIO_FORCE, LOW);
   mean /= COND_SAMPLES;
-  //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
-  vin = (VREF*mean) / 2960.0;  // When there are 2,5V at input, ADC read is 2960
-  //DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0));
+  vin = adc_to_millivolts(mean);
+  DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2));
   Rx = - (R_UP_COND * vin) / (vin-VREF);
-  //DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  //DEBUG_SERIAL.println(String("Resistance in ohms: ") + String(Rx, 2));
   conductivity = 1000000.0/Rx;
-  DEBUG_SERIAL.print(String("Conductivity in uSiemens: ") + String(conductivity, 1) + String(" On "));
+  DEBUG_SERIAL.println(String("Conductivity in uSiemens: ") + String(conductivity,2));
   // Temperature compensation
   switch(GPIO_MEASURE)
   {
     case SR1_MEASURE_GPIO:
     conductivity = conductivity * (1.0 - (ST2_temp - REFERENCE_COMP_TEMP)*COND_DRIFT_PERC);
-    DEBUG_SERIAL.println("SR1");
     break;
     case SR2_MEASURE_GPIO:
     conductivity = conductivity * (1.0 - (ST3_temp - REFERENCE_COMP_TEMP)*COND_DRIFT_PERC);
-    DEBUG_SERIAL.println("SR2");
     break;
     case SR3_MEASURE_GPIO:
     conductivity = conductivity * (1.0 - (ST4_temp - REFERENCE_COMP_TEMP)*COND_DRIFT_PERC);
-    DEBUG_SERIAL.println("SR3");
     break;
   }
   DEBUG_SERIAL.println(String("Compensated conductivity: ") + String(conductivity, 1));
-  return roundf(10*conductivity)/10;   //return conductivity in uSiemens with single decimal place
+  return roundf(10*conductivity)/10;   //return compensated conductivity in uSiemens with single decimal place
 }
 
 float read_pH(int GPIO_MEASURE) {
@@ -490,9 +531,9 @@ float read_pH(int GPIO_MEASURE) {
         delay(pH_INTERVAL); 
       }
   mean /= pH_SAMPLES;
-  //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0)) + String(" On GPIO") + String(GPIO_MEASURE);
-  vin = (3300.0*mean) / 4095.0 + 120;  
-  //DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2) + String(" On GPIO") + String(GPIO_MEASURE));
+  //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0));
+  vin = adc_to_millivolts(mean);
+  //DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2));
   pH = (vin - pH_REF) / mV_per_pH;
   DEBUG_SERIAL.println(String("pH value: ") + String(pH, 2));
   return roundf(pH*10) / 10;   //return the pH with a single decimal place
