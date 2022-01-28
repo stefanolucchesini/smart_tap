@@ -1,0 +1,1 @@
+![Firmware flowchart](SC3 fw Diagram.png)
