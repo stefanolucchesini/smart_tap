@@ -12,17 +12,17 @@
 #define PCNT0_FREQ_UNIT      PCNT_UNIT_0     // select ESP32 pulse counter unit 0 (out of 0 to 7 indipendent counting units) for FL2
 #define PCNT1_FREQ_UNIT      PCNT_UNIT_1     // select ESP32 pulse counter unit 1 for FL3
                                             // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/pcnt.html
-int16_t PulseCounter0 =     0;                                // pulse counter 0 for FL2, max. value is 65536
-int16_t PulseCounter1 =     0;                                // pulse counter 1 for FL3, max. value is 65536
+int16_t PulseCounter0 =     0;                            // pulse counter 0 for FL2, max. value is 65536
+int16_t PulseCounter1 =     0;                            // pulse counter 1 for FL3, max. value is 65536
 int OverflowCounter0 =      0;                            // pulse counter overflow counter 0
 int OverflowCounter1 =      0;                            // pulse counter overflow counter 1
 int PCNT_H_LIM_VAL =       30000;                         // upper limit of counting  max. 32767, write +1 to overflow counter, when reached 
 uint16_t PCNT_FILTER_VAL=  0;                             // filter (damping, inertia) value for avoiding glitches in the count, max. 1023
 pcnt_isr_handle_t user_isr_handle0 = NULL;                // user interrupt handler (not used)
 pcnt_isr_handle_t user_isr_handle1 = NULL;                // user interrupt handler (not used)
-RTC_DATA_ATTR int FL2_liters = 0;                         // number of liters that pass through the flux sensor FL2
-RTC_DATA_ATTR int FL3_liters = 0;                         // number of liters that pass through the flux sensor FL3
-#define PULSES_PER_LITER 165                              // 165 pulses from the flux sensor tell that a liter has passed
+RTC_DATA_ATTR float FL2_liters = 0;                       // number of liters that pass through the flux sensor FL2
+RTC_DATA_ATTR float FL3_liters = 0;                       // number of liters that pass through the flux sensor FL3
+#define PULSES_PER_LITER 165.0                            // 165 pulses from the flux sensor tell that a liter has passed
 //// Deep sleep params ////
 #define uS_TO_S_FACTOR 1000000ULL                         // Conversion factor for micro seconds to seconds 
 int time_to_sleep = 360;                                  // Default time ESP32 will go to sleep (in seconds) 
@@ -40,7 +40,7 @@ float SR1_value, SR2_value, SR3_value;
 //// Temperature sensors readouts ////
 float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
-#define SW_VERSION "0.3"
+#define SW_VERSION "0.4"
 #define DEVICE_TYPE "SC3"     
 #define DEVICE_ID 00000007                                // ranges from 3 to 7
 //// Other handy variables ////
@@ -118,6 +118,7 @@ RTC_DATA_ATTR int messageCount = 1;                // tells the number of the se
 #define EV4_GPIO   14       // Electrovalve EV4 connected to GPIO14
 #define EV5_GPIO   12       // Electrovalve EV5 connected to GPIO12
 #define RA1_GPIO   21       // Electrovalve RA1 connected to GPIO21
+#define RA1_SENSE_GPIO GPIO_NUM_2  // RA1 status read pin
 #define ST2_FORCE_GPIO 23   // Temperature sensor ST2 force pin
 #define ST3_FORCE_GPIO 22   // Temperature sensor ST3 force pin
 #define ST4_FORCE_GPIO 19   // Temperature sensor ST4 force pin
@@ -131,6 +132,7 @@ RTC_DATA_ATTR int messageCount = 1;                // tells the number of the se
 #define SR2_MEASURE_GPIO 33 // Temperature sensor SR2 measure pin
 #define SR3_MEASURE_GPIO 25 // Temperature sensor SR3 measure pin
 #define SPH1_GPIO 36        // pH sensor SPH1 connected to VP 
+#define RES1_GPIO 4         // Water heater under the tap pin
 #define LED   5             // Status led connected to GPIO5
 
 static void SendConfirmationCallback(IOTHUB_CLIENT_CONFIRMATION_RESULT result)
@@ -276,11 +278,11 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
   OverflowCounter1 = 0;                                       // set overflow counter to zero
   pcnt_counter_clear(PCNT1_FREQ_UNIT);                        // zero and reset of pulse counter unit
   }
-  int get_FL2_liters(){                                              // converts the pulses received from fl2 to liters
-      pcnt_get_counter_value(PCNT0_FREQ_UNIT, &PulseCounter0);       // get pulse counter value - maximum value is 16 bit
-      return ( OverflowCounter0*PCNT_H_LIM_VAL + PulseCounter0 ) / PULSES_PER_LITER;
+  float get_FL2_liters(){                                              // converts the pulses received from fl2 to liters
+    pcnt_get_counter_value(PCNT0_FREQ_UNIT, &PulseCounter0);       // get pulse counter value - maximum value is 16 bit
+    return ( OverflowCounter0*PCNT_H_LIM_VAL + PulseCounter0 ) / PULSES_PER_LITER;
   }
-  int get_FL3_liters(){                                              // converts the pulses received from fl3 to liters
+  float get_FL3_liters(){                                              // converts the pulses received from fl3 to liters
     pcnt_get_counter_value(PCNT1_FREQ_UNIT, &PulseCounter1);         // get pulse counter value - maximum value is 16 bit
     return ( OverflowCounter1*PCNT_H_LIM_VAL + PulseCounter1 ) / PULSES_PER_LITER;
 }
@@ -370,10 +372,10 @@ void setup_with_wifi() {
 }
 
 void setup_just_to_update_flux() {
-  int old_FL2_liters = 0;
-  int old_FL3_liters = 0;
-  int current_FL2_liters;
-  int current_FL3_liters;
+  float old_FL2_liters = 0;
+  float old_FL3_liters = 0;
+  float current_FL2_liters;
+  float current_FL3_liters;
   while(true){
     delay(5000);
     current_FL2_liters = get_FL2_liters();
@@ -388,17 +390,25 @@ void setup_just_to_update_flux() {
         FL3_liters += current_FL3_liters;
         timeval timeNow, timeDiff;
         gettimeofday(&timeNow, NULL);
+        DEBUG_SERIAL.print("timeNow ");
+        DEBUG_SERIAL.println(timeNow.tv_sec);
         timersub(&timeNow,&sleepTime,&timeDiff);
         DEBUG_SERIAL.println(String("Deep sleep time in s: ") + String(timeDiff.tv_sec));
         residual_time_to_sleep -= timeDiff.tv_sec;
-        if(residual_time_to_sleep < 0) residual_time_to_sleep = time_to_sleep;      // do not allow negative times
+        if(residual_time_to_sleep <= 0) {
+          DEBUG_SERIAL.println("No time left to sleep, connecting to Wi-Fi");
+          setup_with_wifi();    // go directly to wifi mode if no time is left 
+          return;  // go to void loop()
+        }
         DEBUG_SERIAL.println(String("Residual sleep time in s: ") + String(residual_time_to_sleep));
         esp_sleep_enable_timer_wakeup(residual_time_to_sleep * uS_TO_S_FACTOR);
         esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, LOW);  // FL3 can wake up the board
         esp_sleep_enable_ext1_wakeup(GPIO_SEL_26, ESP_EXT1_WAKEUP_ALL_LOW);  // OR FL2 can wake up the board
         DEBUG_SERIAL.println("Going back to sleep...");
-        DEBUG_SERIAL.flush(); 
-        gettimeofday(&sleepTime, NULL);                         
+        gettimeofday(&sleepTime, NULL);  
+        DEBUG_SERIAL.print("sleepTime ");
+        DEBUG_SERIAL.println(sleepTime.tv_sec);
+        DEBUG_SERIAL.flush();                        
         esp_deep_sleep_start();
       } 
     old_FL2_liters = current_FL2_liters;
@@ -548,6 +558,8 @@ void setup() {
   pinMode(EV4_GPIO, OUTPUT);
   pinMode(EV5_GPIO, OUTPUT);
   pinMode(RA1_GPIO, OUTPUT);
+  pinMode(RA1_SENSE_GPIO, INPUT);
+  pinMode(RES1_GPIO, OUTPUT);
   pinMode(ST2_FORCE_GPIO, OUTPUT);
   pinMode(ST3_FORCE_GPIO, OUTPUT);
   pinMode(ST4_FORCE_GPIO, OUTPUT);
@@ -616,8 +628,13 @@ void send_message(int reply_type, int msgid) {
   msgtosend["ST3"] = ST3_temp;
   msgtosend["ST4"] = ST4_temp;
   msgtosend["SPH1"] = pH_value;
-  msgtosend["FL2"] = FL2_liters;
-  msgtosend["FL3"] = FL3_liters;      
+  FL2_liters += get_FL2_liters();    // add fluxed liters from wakeup
+  FL3_liters += get_FL3_liters();
+  // reset counters in order to avoid re-counting fluxed liters
+  Reset_PCNT0();     
+  Reset_PCNT1();
+  msgtosend["FL2"] = roundf(10*FL2_liters)/10;
+  msgtosend["FL3"] = roundf(10*FL3_liters)/10;      
   msgtosend["EV2"] = EV2_status;
   msgtosend["EV3"] = EV3_status;                   
   msgtosend["EV4"] = EV4_status;   
@@ -625,7 +642,6 @@ void send_message(int reply_type, int msgid) {
   msgtosend["RA1"] = RA1_status; 
   msgtosend["low_power"] = low_power;
   msgtosend["sleep_time"] = time_to_sleep;   
-
   char out[512];
   int msgsize =serializeJson(msgtosend, out);
   //DEBUG_SERIAL.println(msgsize);
@@ -686,7 +702,10 @@ void loop() {
       esp_sleep_enable_ext1_wakeup(GPIO_SEL_26, ESP_EXT1_WAKEUP_ALL_LOW); // OR FL3 can wake up the board
       esp_sleep_enable_timer_wakeup(time_to_sleep * uS_TO_S_FACTOR);
       residual_time_to_sleep = time_to_sleep; 
-      gettimeofday(&sleepTime, NULL);         
+      gettimeofday(&sleepTime, NULL);   
+      DEBUG_SERIAL.print("sleepTime ");
+      DEBUG_SERIAL.println(sleepTime.tv_sec);
+      DEBUG_SERIAL.flush();       
       esp_deep_sleep_start();
       }
   }
