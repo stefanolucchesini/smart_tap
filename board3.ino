@@ -35,14 +35,16 @@ int EV3_status = 0;
 int EV4_status = 0;
 int EV5_status = 0;
 int RA1_status = 0;
+//// Heater under tap status variable ////
+int RES1_status = 0;
 //// Conducibility sensors readouts ////
 float SR1_value, SR2_value, SR3_value;
 //// Temperature sensors readouts ////
 float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
-#define SW_VERSION "0.4"
+#define SW_VERSION "0.5"
 #define DEVICE_TYPE "SC3"     
-#define DEVICE_ID 00000007                                // ranges from 3 to 7
+#define DEVICE_ID 00000003                                // ranges from 3 to 7
 //// Other handy variables ////
 volatile int low_power = 0;                               // flag that enables or disables low power mode
 RTC_DATA_ATTR timeval sleepTime;
@@ -164,6 +166,7 @@ static void MessageCallback(const char* payLoad, int size)
           EV4_status = doc["EV4"];
           EV5_status = doc["EV5"];
           RA1_status = doc["RA1"];
+          RES1_status = doc["RES1"];
           low_power = doc["low_power"];
           time_to_sleep = doc["sleep_time"];
       }
@@ -578,6 +581,7 @@ void setup() {
   digitalWrite(EV4_GPIO, LOW);
   digitalWrite(EV5_GPIO, LOW);
   digitalWrite(RA1_GPIO, LOW);
+  digitalWrite(RES1_GPIO, LOW);
   digitalWrite(ST2_FORCE_GPIO, LOW);                            // All force pins initially off
   digitalWrite(ST3_FORCE_GPIO, LOW);
   digitalWrite(ST4_FORCE_GPIO, LOW);
@@ -640,6 +644,7 @@ void send_message(int reply_type, int msgid) {
   msgtosend["EV4"] = EV4_status;   
   msgtosend["EV5"] = EV5_status;   
   msgtosend["RA1"] = RA1_status; 
+  msgtosend["RES1"] = RES1_status; 
   msgtosend["low_power"] = low_power;
   msgtosend["sleep_time"] = time_to_sleep;   
   char out[512];
@@ -668,8 +673,7 @@ void send_message(int reply_type, int msgid) {
     DEBUG_SERIAL.println(hasIoTHub);
     DEBUG_SERIAL.print("reply_over_serial: ");
     DEBUG_SERIAL.println(reply_over_serial);
-  }
-    
+  }  
 }
 
 
@@ -685,6 +689,7 @@ void loop() {
         digitalWrite(EV4_GPIO, EV4_status);   
         digitalWrite(EV5_GPIO, EV5_status);   
         digitalWrite(RA1_GPIO, RA1_status);
+        digitalWrite(RES1_GPIO, RES1_status);
         send_message(ACK_HUB, received_msg_id);
         break;
       case STATUS:
@@ -736,6 +741,7 @@ void loop() {
             EV4_status = doc["EV4"];
             EV5_status = doc["EV5"];
             RA1_status = doc["RA1"];
+            RES1_status = doc["RES1"];
             low_power = doc["low_power"];
             time_to_sleep = doc["sleep_time"];
         }
