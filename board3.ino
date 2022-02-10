@@ -42,9 +42,10 @@ float SR1_value, SR2_value, SR3_value;
 //// Temperature sensors readouts ////
 float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
-#define SW_VERSION "0.5"
+#define SW_VERSION "0.6"
 #define DEVICE_TYPE "SC3"     
 #define DEVICE_ID 00000003                                // ranges from 3 to 7
+#define DEVICE_ID_STRING "00000003 "                      //CHANGE ALSO THIS!
 //// Other handy variables ////
 volatile int low_power = 0;                               // flag that enables or disables low power mode
 RTC_DATA_ATTR timeval sleepTime;
@@ -54,6 +55,7 @@ volatile int received_msg_id = 0;                         // used for ack mechan
 volatile int received_msg_type = -1;                      // if 0 the device is sending its status
                                                           // if 1 the HUB wants to change the status of the device (with the values passed in the message)
                                                           // if 2 the device ACKs the HUB in response to a command
+volatile int received_device_id;                                                          
 // defines for message type 
 #define STATUS 0
 #define SET_VALUES 1
@@ -160,6 +162,7 @@ static void MessageCallback(const char* payLoad, int size)
     new_request = true;
     received_msg_id = doc["message_id"];
     received_msg_type = doc["message_type"];
+    received_device_id = doc["device_id"];
       if(received_msg_type == SET_VALUES) {
           EV2_status = doc["EV2"];
           EV3_status = doc["EV3"];
@@ -375,6 +378,7 @@ void setup_with_wifi() {
 }
 
 void setup_just_to_update_flux() {
+  digitalWrite(EV4_GPIO, HIGH);  // open EV4 electrovalve to allow water to exit from tap
   float old_FL2_liters = 0;
   float old_FL3_liters = 0;
   float current_FL2_liters;
@@ -389,6 +393,7 @@ void setup_just_to_update_flux() {
       }
       else {
         DEBUG_SERIAL.println("Water not flushed anymore");
+        digitalWrite(EV4_GPIO, LOW);
         FL2_liters += current_FL2_liters;
         FL3_liters += current_FL3_liters;
         timeval timeNow, timeDiff;
@@ -405,8 +410,7 @@ void setup_just_to_update_flux() {
         }
         DEBUG_SERIAL.println(String("Residual sleep time in s: ") + String(residual_time_to_sleep));
         esp_sleep_enable_timer_wakeup(residual_time_to_sleep * uS_TO_S_FACTOR);
-        esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, LOW);  // FL3 can wake up the board
-        esp_sleep_enable_ext1_wakeup(GPIO_SEL_26, ESP_EXT1_WAKEUP_ALL_LOW);  // OR FL2 can wake up the board
+        esp_sleep_enable_ext0_wakeup(RA1_SENSE_GPIO, HIGH);  // RA1 wakes up the board
         DEBUG_SERIAL.println("Going back to sleep...");
         gettimeofday(&sleepTime, NULL);  
         DEBUG_SERIAL.print("sleepTime ");
@@ -597,12 +601,8 @@ void setup() {
   wakeup_reason = esp_sleep_get_wakeup_cause();
   switch(wakeup_reason)
   {
-    case ESP_SLEEP_WAKEUP_EXT1 : 
-    DEBUG_SERIAL.println("Wakeup caused by flux sensor FL3");     
-    setup_just_to_update_flux();
-    break;
     case ESP_SLEEP_WAKEUP_EXT0 : 
-    DEBUG_SERIAL.println("Wakeup caused by flux sensor FL2");     
+    DEBUG_SERIAL.println("Wakeup caused by tap opening");     
     setup_just_to_update_flux();
     break;
     case ESP_SLEEP_WAKEUP_TIMER : 
@@ -623,7 +623,7 @@ void send_message(int reply_type, int msgid) {
   msgtosend["timestamp"] = UTC.dateTime(ISO8601);
   msgtosend["message_type"] = reply_type;
   msgtosend["device_type"] = DEVICE_TYPE;
-  msgtosend["device_id"] = DEVICE_ID;
+  msgtosend["device_id"] = DEVICE_ID_STRING;
   msgtosend["iot_module_software_version"] = SW_VERSION;
   msgtosend["SR1"] = SR1_value;
   msgtosend["SR2"] = SR2_value;
@@ -703,8 +703,7 @@ void loop() {
       if( low_power == true) {
       DEBUG_SERIAL.println("Going into deep sleep");
       DEBUG_SERIAL.flush(); 
-      esp_sleep_enable_ext0_wakeup(GPIO_NUM_27, LOW);  // FL2 can wake up the board
-      esp_sleep_enable_ext1_wakeup(GPIO_SEL_26, ESP_EXT1_WAKEUP_ALL_LOW); // OR FL3 can wake up the board
+      esp_sleep_enable_ext0_wakeup(RA1_SENSE_GPIO, HIGH);  // RA1 wakes up the board
       esp_sleep_enable_timer_wakeup(time_to_sleep * uS_TO_S_FACTOR);
       residual_time_to_sleep = time_to_sleep; 
       gettimeofday(&sleepTime, NULL);   
@@ -713,6 +712,11 @@ void loop() {
       DEBUG_SERIAL.flush();       
       esp_deep_sleep_start();
       }
+  }
+  if(digitalRead(RA1_SENSE_GPIO) == HIGH) {
+   EV4_status = 1;
+   RA1_status = EV4_status;
+   digitalWrite(EV4_GPIO, EV4_status);
   }
   #if DEBUG == true
   // send data only when you receive data:
