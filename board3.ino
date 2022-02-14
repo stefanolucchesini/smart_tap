@@ -28,7 +28,6 @@ RTC_DATA_ATTR float FL3_liters = 0;                       // number of liters th
 int time_to_sleep = 360;                                  // Default time ESP32 will go to sleep (in seconds) 
 RTC_DATA_ATTR int residual_time_to_sleep;           
 RTC_DATA_ATTR int bootCount = 0;
-
 //// Electrovalves status variables ////
 int EV2_status = 0;
 int EV3_status = 0;
@@ -38,11 +37,13 @@ int RA1_status = 0;
 //// Heater under tap status variable ////
 int RES1_status = 0;
 //// Conducibility sensors readouts ////
+float old_SR1_value, old_SR2_value, old_SR3_value;
 float SR1_value, SR2_value, SR3_value;
 //// Temperature sensors readouts ////
+float old_ST2_temp, old_ST3_temp, old_ST4_temp;
 float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
-#define SW_VERSION "0.6"
+#define SW_VERSION "0.7"
 #define DEVICE_TYPE "SC3"     
 #define DEVICE_ID 00000003                                // ranges from 3 to 7
 #define DEVICE_ID_STRING "00000003 "                      //CHANGE ALSO THIS!
@@ -55,7 +56,8 @@ volatile int received_msg_id = 0;                         // used for ack mechan
 volatile int received_msg_type = -1;                      // if 0 the device is sending its status
                                                           // if 1 the HUB wants to change the status of the device (with the values passed in the message)
                                                           // if 2 the device ACKs the HUB in response to a command
-volatile int received_device_id;                                                          
+volatile int received_device_id;
+StaticJsonDocument<512> doc;                              // pre-allocate 512 bytes of memory for the received json message                                                                   
 // defines for message type 
 #define STATUS 0
 #define SET_VALUES 1
@@ -70,7 +72,7 @@ volatile int received_device_id;
 #define ON 255
 
 //// PH sensor reading variable ////
-float pH_value;                                       // pH value read from the pH sensor (typical range: 4.5 <-> 9.5)
+float old_pH_value, pH_value;                         // pH value read from the pH sensor (typical range: 4.5 <-> 9.5)
 #define pH_SAMPLES 100                                // Number of samples taken to give a pH value
 #define pH_INTERVAL 10                                // Interval of time in ms between two successive samples
 #define pH_REF  1250                                  // Reference voltage in mV defined by hardware
@@ -81,8 +83,8 @@ float pH_value;                                       // pH value read from the 
 #define R_UP_TEMP 2000.0                              // Upper resistance of the voltage partitioner used to measure the PT100   
 #define R0 100.0                                      // resistance of the sensor at 0 deg c          
 #define ALPHA 0.004                                   // alpha coefficient
-#define TEMP_SAMPLES 500                              // Number of samples taken to give a temperature value
-#define TEMP_INTERVAL 5                               // Interval of time in ms between two successive samples
+#define TEMP_SAMPLES 100                              // Number of samples taken to give a temperature value
+#define TEMP_INTERVAL 10                               // Interval of time in ms between two successive samples
 
 // Variables for voltages corresponding to conductiviy ranges, for ECDICPT/1:
 #define R_UP_COND   220000.0                          // Upper resistance of the voltage partitioner used to measure conductivity
@@ -138,6 +140,33 @@ RTC_DATA_ATTR int messageCount = 1;                // tells the number of the se
 #define SPH1_GPIO 36        // pH sensor SPH1 connected to VP 
 #define RES1_GPIO 4         // Water heater under the tap pin
 #define LED   5             // Status led connected to GPIO5
+// Wi-Fi connection variables
+WiFiManager wm;
+String wifiID, wifiPASS;    // used for reconnecting
+// Create a timer to generate an ISR at a defined frequency in order to sample the system
+hw_timer_t * timer = NULL;
+#define OVF_MS 100                       // The timer interrupt fires every OVF_MS milliseconds
+volatile int time2sample_counter = 0; 
+#define SAMPLING_TIME  60                // Sample the sensors every SAMPLING_TIME seconds
+bool new_status = false;                 // When it's true a sensor has changed its value and it needs to be sent
+volatile bool timetosample = false; 
+volatile bool ra1_and_ev4_override_flag = false;  // ignores tap opening by user, it is toggled for every received message_type=2 
+
+void IRAM_ATTR onTimer(){            // Timer ISR, called on timer overflow every OVF_MS
+  // open water if user puts its hand in front of sensor, otherwise close it
+  // but if HUB wants to do an autonomous control, disable user interface
+  if(ra1_and_ev4_override_flag == false) {
+    EV4_status = digitalRead(RA1_SENSE_GPIO);
+    RA1_status = EV4_status;
+    digitalWrite(EV4_GPIO, EV4_status);
+    digitalWrite(RA1_GPIO, RA1_status);
+  }
+  time2sample_counter++;
+  if(time2sample_counter >= SAMPLING_TIME*10){
+    timetosample = true;
+    time2sample_counter = 0;
+  } 
+}
 
 static void SendConfirmationCallback(IOTHUB_CLIENT_CONFIRMATION_RESULT result)
 {
@@ -152,7 +181,6 @@ static void MessageCallback(const char* payLoad, int size)
   ledcWrite(LED_CHANNEL, ON);
   DEBUG_SERIAL.println("Received message from HUB");
   if (size < 512) { 
-    StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, payLoad);
     if (error) {
       DEBUG_SERIAL.print(F("deserializeJson() failed: "));
@@ -314,7 +342,6 @@ void setup_with_wifi() {
   sample_sensors();
   DEBUG_SERIAL.println("Starting WiFi connection...");
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
-  WiFiManager wm;
   //wm.resetSettings();  // reset settings - wipe stored credentials for testing
   bool res;
   switch(DEVICE_ID)
@@ -340,6 +367,9 @@ void setup_with_wifi() {
   }
   
   //res = wm.autoConnect("AutoConnectAP","password"); // Generates a pwd-protected ap for the user to connect and tell Wi-Fi credentials
+  // store wifi credentials for future reconnection
+  wifiID = wm.getWiFiSSID();
+  wifiPASS = wm.getWiFiPass();
   if(!res) {
       DEBUG_SERIAL.println("Failed to connect to wifi");
       delay(10000);
@@ -374,6 +404,18 @@ void setup_with_wifi() {
   ledcWrite(LED_CHANNEL, OFF);
   DEBUG_SERIAL.println("Sending status message to HUB...");
   send_message(STATUS, messageCount++);
+   /* Use 1st timer of 4 */
+  /* 1 tick take 1/(80MHZ/80) = 1us so we set divider 80 and count up */
+  timer = timerBegin(0, 80, true);
+  /* Attach onTimer function to our timer */
+  timerAttachInterrupt(timer, &onTimer, true);
+  /* Set alarm to call onTimer function every OVF_MS milliseconds. 
+  1 tick is 1us*/
+  /* Repeat the alarm (third parameter) */
+  timerAlarmWrite(timer, 1000*OVF_MS, true);
+  /* Start an alarm */
+  timerAlarmEnable(timer);
+  DEBUG_SERIAL.println("ISR Timer started");
   DEBUG_SERIAL.println("Waiting for a message from HUB");
 }
 
@@ -617,10 +659,12 @@ void setup() {
 }
 
 void send_message(int reply_type, int msgid) {
-
-  StaticJsonDocument<512> msgtosend;            // pre-allocate 512 bytes of memory for the json message
+  StaticJsonDocument<512> msgtosend;   
   msgtosend["message_id"] = msgid;
-  msgtosend["timestamp"] = UTC.dateTime(ISO8601);
+  if(reply_type == ACK_HUB)
+    msgtosend["timestamp"] = doc["timestamp"];
+  else
+    msgtosend["timestamp"] = UTC.dateTime(ISO8601);
   msgtosend["message_type"] = reply_type;
   msgtosend["device_type"] = DEVICE_TYPE;
   msgtosend["device_id"] = DEVICE_ID_STRING;
@@ -684,6 +728,7 @@ void loop() {
     new_request = false;
     switch (received_msg_type)  {
       case SET_VALUES: 
+        ra1_and_ev4_override_flag = !ra1_and_ev4_override_flag;
         digitalWrite(EV2_GPIO, EV2_status);
         digitalWrite(EV3_GPIO, EV3_status);                   
         digitalWrite(EV4_GPIO, EV4_status);   
@@ -693,6 +738,10 @@ void loop() {
         send_message(ACK_HUB, received_msg_id);
         break;
       case STATUS:
+        // since SR3 needs ADC2 and ADC2 can't be used
+        // if wifi is on, we need to disconect, sample 
+        // and reconnect
+        disconnect_sample_reconnect();
         send_message(STATUS, received_msg_id);
         break;
       default:
@@ -713,10 +762,24 @@ void loop() {
       esp_deep_sleep_start();
       }
   }
-  if(digitalRead(RA1_SENSE_GPIO) == HIGH) {
-   EV4_status = 1;
-   RA1_status = EV4_status;
-   digitalWrite(EV4_GPIO, EV4_status);
+  if(timetosample == true) {             // sensor values are sampled every SAMPLING_TIME seconds
+    timetosample = false;
+    // Save previous status of sensors  //
+    old_pH_value = pH_value;
+    old_SR1_value = SR1_value;
+    old_SR2_value = SR2_value;
+    old_SR3_value = SR3_value;
+    old_ST2_temp = ST2_temp;
+    old_ST3_temp = ST3_temp;
+    old_ST4_temp = ST4_temp;
+    disconnect_sample_reconnect();
+    if( pH_value != old_pH_value || SR1_value != old_SR1_value || SR2_value != old_SR2_value ||
+        SR3_value != old_SR3_value || ST2_temp != old_ST2_temp || ST3_temp != old_ST3_temp || ST4_temp != old_ST4_temp)
+      new_status = true;    
+  }
+  if(new_status == true) {                 // the value read from one or more sensors is changed, notify the HUB
+  new_status = false;
+  send_message(STATUS, messageCount++);
   }
   #if DEBUG == true
   // send data only when you receive data:
@@ -752,4 +815,36 @@ void loop() {
     }
   }
   #endif
+}
+
+void disconnect_sample_reconnect(){
+  // disconnect from iot hub
+  Esp32MQTTClient_Close();
+  hasIoTHub = false;
+  // stop wifi
+  if(esp_wifi_stop() == ESP_OK)
+    DEBUG_SERIAL.println("WiFi stopped correctly");
+  // now we can sample sensors
+  sample_sensors();
+  ledcWrite(LED_CHANNEL, BLINK_5HZ);
+  // reconnect to wifi
+  if(esp_wifi_start() == ESP_OK)
+    DEBUG_SERIAL.println("WiFi restarted correctly");
+  char id[20], pass[20]; 
+  wifiID.toCharArray(id, wifiID.length()+1);
+  wifiPASS.toCharArray(pass, wifiPASS.length()+1);
+  DEBUG_SERIAL.println(String("id ")+String(id));
+  DEBUG_SERIAL.println(String("pass ")+String(pass));
+  WiFi.begin(id, pass);
+  DEBUG_SERIAL.print("Reconnecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    DEBUG_SERIAL.print(".");
+    }
+  // reconnect to iot hub  
+  Esp32MQTTClient_Init((const uint8_t*)connectionString, true);
+  hasIoTHub = true;
+  ledcWrite(LED_CHANNEL, OFF);
+  DEBUG_SERIAL.println("Back in business");
+
 }
