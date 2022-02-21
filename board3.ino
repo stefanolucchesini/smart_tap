@@ -46,7 +46,7 @@ float ST2_temp, ST3_temp, ST4_temp;
 #define SW_VERSION "0.7"
 #define DEVICE_TYPE "SC3"     
 #define DEVICE_ID 00000003                                // ranges from 3 to 7
-#define DEVICE_ID_STRING "00000003 "                      //CHANGE ALSO THIS!
+#define DEVICE_ID_STRING "00000003"                       //CHANGE ALSO THIS!
 //// Other handy variables ////
 volatile int low_power = 0;                               // flag that enables or disables low power mode
 RTC_DATA_ATTR timeval sleepTime;
@@ -592,8 +592,8 @@ float read_pH(int GPIO_MEASURE) {
   mean /= pH_SAMPLES;
   //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0));
   vin = adc_to_millivolts(mean);
-  //DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2));
-  pH = (vin - pH_REF) / mV_per_pH;
+  DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2));
+  pH = 7.0 + (vin - pH_REF) / mV_per_pH;
   DEBUG_SERIAL.println(String("pH value: ") + String(pH, 2));
   return roundf(pH*10) / 10;   //return the pH with a single decimal place
 }
