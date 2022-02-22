@@ -43,10 +43,10 @@ float SR1_value, SR2_value, SR3_value;
 float old_ST2_temp, old_ST3_temp, old_ST4_temp;
 float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
-#define SW_VERSION "0.7"
+#define SW_VERSION "0.8"
 #define DEVICE_TYPE "SC3"     
-#define DEVICE_ID 00000003                                // ranges from 3 to 7
-#define DEVICE_ID_STRING "00000003"                       //CHANGE ALSO THIS!
+#define DEVICE_ID 00000007                                // ranges from 3 to 7
+#define DEVICE_ID_STRING "00000007"                       //CHANGE ALSO THIS!
 //// Other handy variables ////
 volatile int low_power = 0;                               // flag that enables or disables low power mode
 RTC_DATA_ATTR timeval sleepTime;
@@ -150,17 +150,62 @@ volatile int time2sample_counter = 0;
 #define SAMPLING_TIME  60                // Sample the sensors every SAMPLING_TIME seconds
 bool new_status = false;                 // When it's true a sensor has changed its value and it needs to be sent
 volatile bool timetosample = false; 
-volatile bool ra1_and_ev4_override_flag = false;  // ignores tap opening by user, it is toggled for every received message_type=2 
+
+// RA1 FLUSH STATE MACHINE
+#define IDLE 0
+#define START 1
+#define WAIT_FLUSH 2
+#define WATER_FILL 3
+#define WAIT_FILL 4
+int RA1_flush_state = IDLE;
+volatile int wait = 0;
+#define WAIT_FLUSH_TIME 30
+#define WAIT_FILL_TIME 10
 
 void IRAM_ATTR onTimer(){            // Timer ISR, called on timer overflow every OVF_MS
   // open water if user puts its hand in front of sensor, otherwise close it
-  // but if HUB wants to do an autonomous control, disable user interface
-  if(ra1_and_ev4_override_flag == false) {
+  // but if HUB wants to do a flush, disable user interface
+  if(RA1_flush_state == IDLE) { 
     EV4_status = digitalRead(RA1_SENSE_GPIO);
     RA1_status = EV4_status;
     digitalWrite(EV4_GPIO, EV4_status);
     digitalWrite(RA1_GPIO, RA1_status);
   }
+  switch(RA1_flush_state){
+    case IDLE:
+    break;
+    case START:
+    digitalWrite(EV4_GPIO, LOW);
+    digitalWrite(RA1_GPIO, HIGH);
+    digitalWrite(EV5_GPIO, HIGH);
+    RA1_flush_state = WAIT_FLUSH;
+    break;
+    case WAIT_FLUSH:
+    wait++;
+    if(wait >= WAIT_FLUSH_TIME){
+      wait = 0;
+      RA1_flush_state = WATER_FILL;
+    }
+    break;
+    case WATER_FILL:
+    digitalWrite(EV4_GPIO, HIGH);
+    digitalWrite(RA1_GPIO, HIGH);
+    digitalWrite(EV5_GPIO, LOW);
+    RA1_flush_state = WAIT_FILL;
+    break;
+    case WAIT_FILL:
+    wait++;
+    if(wait >= WAIT_FILL_TIME){
+      wait = 0;
+      digitalWrite(EV4_GPIO, LOW);
+      digitalWrite(RA1_GPIO, LOW);
+      RA1_flush_state = IDLE;
+      RA1_status = 0;
+      new_status = true;
+    }
+    break;
+  }
+
   time2sample_counter++;
   if(time2sample_counter >= SAMPLING_TIME*10){
     timetosample = true;
@@ -200,6 +245,8 @@ static void MessageCallback(const char* payLoad, int size)
           RES1_status = doc["RES1"];
           low_power = doc["low_power"];
           time_to_sleep = doc["sleep_time"];
+          if(RA1_status == 1) 
+            RA1_flush_state = START;
       }
     }
   }
@@ -350,15 +397,19 @@ void setup_with_wifi() {
     res = wm.autoConnect("GENIALE brd3 dev3 setup"); // Generates a pwd-free ap for the user to connect and tell Wi-Fi credentials
     break;
     case 00000004:
+    delay(2000);  // wait for device 3 to connect in order to avoid conflicts
     res = wm.autoConnect("GENIALE brd3 dev4 setup"); 
     break;
     case 00000005:
+    delay(4000);
     res = wm.autoConnect("GENIALE brd3 dev5 setup"); 
     break;
     case 00000006:
+    delay(6000);
     res = wm.autoConnect("GENIALE brd3 dev6 setup"); 
     break;
     case 00000007:
+    delay(8000);
     res = wm.autoConnect("GENIALE brd3 dev7 setup"); 
     break;
     default:
@@ -367,9 +418,6 @@ void setup_with_wifi() {
   }
   
   //res = wm.autoConnect("AutoConnectAP","password"); // Generates a pwd-protected ap for the user to connect and tell Wi-Fi credentials
-  // store wifi credentials for future reconnection
-  wifiID = wm.getWiFiSSID();
-  wifiPASS = wm.getWiFiPass();
   if(!res) {
       DEBUG_SERIAL.println("Failed to connect to wifi");
       delay(10000);
@@ -378,6 +426,9 @@ void setup_with_wifi() {
   else {
       //if you get here you have connected to the WiFi    
       DEBUG_SERIAL.println("Connected to wifi!");
+      // store wifi credentials for future reconnection
+      wifiID = wm.getWiFiSSID();
+      wifiPASS = wm.getWiFiPass();
       ledcWrite(LED_CHANNEL, ON);
       DEBUG_SERIAL.println("Wait for ezTime to get its time synchronized");
 	    waitForSync();
@@ -728,7 +779,6 @@ void loop() {
     new_request = false;
     switch (received_msg_type)  {
       case SET_VALUES: 
-        ra1_and_ev4_override_flag = !ra1_and_ev4_override_flag;
         digitalWrite(EV2_GPIO, EV2_status);
         digitalWrite(EV3_GPIO, EV3_status);                   
         digitalWrite(EV4_GPIO, EV4_status);   
