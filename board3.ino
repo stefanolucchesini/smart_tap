@@ -160,8 +160,9 @@ volatile bool timetosample = false;
 #define IGNORE_MANUAL_CONTROL 5
 int RA1_flush_state = IDLE;
 volatile int wait = 0;
-#define WAIT_FLUSH_TIME 30
-#define WAIT_FILL_TIME 10
+#define WAIT_FLUSH_TIME 3      // seconds
+#define WAIT_FILL_TIME 1       // seconds
+#define MAX_OPENING_TIME 60    // seconds
 
 void IRAM_ATTR onTimer(){            // Timer ISR, called on timer overflow every OVF_MS
   // open water if user puts its hand in front of sensor, otherwise close it
@@ -183,7 +184,7 @@ void IRAM_ATTR onTimer(){            // Timer ISR, called on timer overflow ever
     break;
     case WAIT_FLUSH:
     wait++;
-    if(wait >= WAIT_FLUSH_TIME){
+    if(wait >= WAIT_FLUSH_TIME*10){
       wait = 0;
       RA1_flush_state = WATER_FILL;
     }
@@ -196,7 +197,7 @@ void IRAM_ATTR onTimer(){            // Timer ISR, called on timer overflow ever
     break;
     case WAIT_FILL:
     wait++;
-    if(wait >= WAIT_FILL_TIME){
+    if(wait >= WAIT_FILL_TIME*10){
       wait = 0;
       digitalWrite(EV4_GPIO, LOW);
       digitalWrite(RA1_GPIO, LOW);
@@ -206,6 +207,11 @@ void IRAM_ATTR onTimer(){            // Timer ISR, called on timer overflow ever
     }
     break;
     case IGNORE_MANUAL_CONTROL:
+      wait++;
+      if(wait >= MAX_OPENING_TIME*10){
+        wait = 0;
+        RA1_flush_state = IDLE;
+      }
     break;
   }
 
@@ -650,7 +656,7 @@ float read_pH(int GPIO_MEASURE) {
   //DEBUG_SERIAL.println(String("Raw ADC val: ") + String(mean, 0));
   vin = adc_to_millivolts(mean);
   DEBUG_SERIAL.println(String("Voltage in milliVolts: ") + String(vin, 2));
-  pH = 7.0 + (vin - pH_REF) / mV_per_pH;
+  pH = 7.0 + (pH_REF - vin) / mV_per_pH;
   DEBUG_SERIAL.println(String("pH value: ") + String(pH, 2));
   return roundf(pH*10) / 10;   //return the pH with a single decimal place
 }
