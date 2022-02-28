@@ -43,7 +43,7 @@ float SR1_value, SR2_value, SR3_value;
 float old_ST2_temp, old_ST3_temp, old_ST4_temp;
 float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
-#define SW_VERSION "0.8"
+#define SW_VERSION "0.9"
 #define DEVICE_TYPE "SC3"     
 #define DEVICE_ID 00000007                                // ranges from 3 to 7
 #define DEVICE_ID_STRING "00000007"                       //CHANGE ALSO THIS!
@@ -157,6 +157,7 @@ volatile bool timetosample = false;
 #define WAIT_FLUSH 2
 #define WATER_FILL 3
 #define WAIT_FILL 4
+#define IGNORE_MANUAL_CONTROL 5
 int RA1_flush_state = IDLE;
 volatile int wait = 0;
 #define WAIT_FLUSH_TIME 30
@@ -204,6 +205,8 @@ void IRAM_ATTR onTimer(){            // Timer ISR, called on timer overflow ever
       new_status = true;
     }
     break;
+    case IGNORE_MANUAL_CONTROL:
+    break;
   }
 
   time2sample_counter++;
@@ -246,7 +249,10 @@ static void MessageCallback(const char* payLoad, int size)
           low_power = doc["low_power"];
           time_to_sleep = doc["sleep_time"];
           if(RA1_status == 1) 
-            RA1_flush_state = START;
+          //  RA1_flush_state = START;
+            RA1_flush_state = IGNORE_MANUAL_CONTROL;
+          else 
+            RA1_flush_state = IDLE;   
       }
     }
   }
