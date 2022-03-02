@@ -43,7 +43,7 @@ float SR1_value, SR2_value, SR3_value;
 float old_ST2_temp, old_ST3_temp, old_ST4_temp;
 float ST2_temp, ST3_temp, ST4_temp;
 //// firmware version of the device and device id ////
-#define SW_VERSION "0.9"
+#define SW_VERSION "1.0"
 #define DEVICE_TYPE "SC3"     
 #define DEVICE_ID 00000007                                // ranges from 3 to 7
 #define DEVICE_ID_STRING "00000007"                       //CHANGE ALSO THIS!
@@ -158,7 +158,7 @@ volatile bool timetosample = false;
 #define WATER_FILL 3
 #define WAIT_FILL 4
 #define IGNORE_MANUAL_CONTROL 5
-int RA1_flush_state = IDLE;
+volatile int RA1_flush_state = IDLE;
 volatile int wait = 0;
 #define WAIT_FLUSH_TIME 3      // seconds
 #define WAIT_FILL_TIME 1       // seconds
@@ -467,18 +467,6 @@ void setup_with_wifi() {
   ledcWrite(LED_CHANNEL, OFF);
   DEBUG_SERIAL.println("Sending status message to HUB...");
   send_message(STATUS, messageCount++);
-   /* Use 1st timer of 4 */
-  /* 1 tick take 1/(80MHZ/80) = 1us so we set divider 80 and count up */
-  timer = timerBegin(0, 80, true);
-  /* Attach onTimer function to our timer */
-  timerAttachInterrupt(timer, &onTimer, true);
-  /* Set alarm to call onTimer function every OVF_MS milliseconds. 
-  1 tick is 1us*/
-  /* Repeat the alarm (third parameter) */
-  timerAlarmWrite(timer, 1000*OVF_MS, true);
-  /* Start an alarm */
-  timerAlarmEnable(timer);
-  DEBUG_SERIAL.println("ISR Timer started");
   DEBUG_SERIAL.println("Waiting for a message from HUB");
 }
 
@@ -701,6 +689,18 @@ void setup() {
   //Increment boot number and print it every reboot
   ++bootCount;
   DEBUG_SERIAL.println("Boot number: " + String(bootCount));
+  /* Use 1st timer of 4 */
+  /* 1 tick take 1/(80MHZ/80) = 1us so we set divider 80 and count up */
+  timer = timerBegin(0, 80, true);
+  /* Attach onTimer function to our timer */
+  timerAttachInterrupt(timer, &onTimer, true);
+  /* Set alarm to call onTimer function every OVF_MS milliseconds. 
+  1 tick is 1us*/
+  /* Repeat the alarm (third parameter) */
+  timerAlarmWrite(timer, 1000*OVF_MS, true);
+  /* Start an alarm */
+  timerAlarmEnable(timer);
+  DEBUG_SERIAL.println("ISR Timer started");
   // PERFORM ACTIONS DEPENDING ON WAKEUP REASON //
   esp_sleep_wakeup_cause_t wakeup_reason;
   wakeup_reason = esp_sleep_get_wakeup_cause();
@@ -899,9 +899,13 @@ void disconnect_sample_reconnect(){
   DEBUG_SERIAL.println(String("pass ")+String(pass));
   WiFi.begin(id, pass);
   DEBUG_SERIAL.print("Reconnecting to WiFi");
+  int timeout = 0;
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     DEBUG_SERIAL.print(".");
+    timeout++;
+    if(timeout > 60)  // restart if connection is unsuccessful after 30 s
+      ESP.restart();
     }
   // reconnect to iot hub  
   Esp32MQTTClient_Init((const uint8_t*)connectionString, true);
